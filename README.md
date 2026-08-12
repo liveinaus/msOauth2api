@@ -3,11 +3,6 @@
 Turns Microsoft OAuth2 mailboxes into simple HTTP endpoints, with a Vue web panel for
 managing accounts and reading mail. Self-hosted as a single Docker container.
 
-A rebuild of [HChaoHui/msOauth2api](https://github.com/HChaoHui/msOauth2api) as an
-npm + Vue 3 project packaged to a Docker image, following the structure of
-[Bemby](https://github.com/liveinaus/Bemby). The public API stays compatible with the
-original, so existing scripts keep working.
-
 ## What it does
 
 Given a Microsoft `client_id` and a `refresh_token`, it reads and sends mail without you
