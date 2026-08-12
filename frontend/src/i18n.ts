@@ -1,0 +1,297 @@
+import { ref } from "vue";
+
+export type Locale = "en" | "zh";
+
+const en = {
+  nav: {
+    accounts: "Accounts",
+    mail: "Mail",
+    settings: "Settings",
+    logout: "Sign out",
+  },
+  common: {
+    save: "Save",
+    saving: "Saving...",
+    cancel: "Cancel",
+    close: "Close",
+    delete: "Delete",
+    edit: "Edit",
+    add: "Add",
+    refresh: "Refresh",
+    search: "Search...",
+    loading: "Loading...",
+    actions: "Actions",
+    selectAll: "Select all",
+    confirm: "Confirm",
+    copy: "Copy",
+    copied: "Copied",
+    never: "Never",
+    yes: "Yes",
+    no: "No",
+    total: "{n} in total",
+    perPage: "{n} per page",
+    none: "Nothing to show",
+    stop: "Stop",
+  },
+  login: {
+    subtitle: "Sign in to the mailbox panel",
+    username: "Username",
+    password: "Password",
+    signIn: "Sign in",
+    signingIn: "Signing in...",
+    error: "Invalid username or password",
+    rateLimited: "Too many attempts. Try again in 15 minutes.",
+  },
+  forcePwd: {
+    title: "Set a new password",
+    subtitle: "This install is still using the default password. Choose a new one to continue.",
+    newPassword: "New password",
+    confirmPassword: "Confirm new password",
+    mismatch: "The two passwords do not match",
+    tooShort: "Password must be at least 8 characters",
+    submit: "Update password",
+  },
+  accounts: {
+    title: "Accounts",
+    email: "Email",
+    clientId: "Client ID",
+    token: "Refresh token",
+    remark: "Note",
+    status: "Status",
+    lastRefresh: "Last refresh",
+    enabled: "Enabled",
+    disabled: "Disabled",
+    import: "Import",
+    export: "Export",
+    addOne: "Add account",
+    refreshTokens: "Refresh tokens",
+    refreshing: "Refreshing...",
+    viewMail: "Open mailbox",
+    deleteSelected: "Delete selected",
+    deleteConfirm: "Delete {n} account(s)? This cannot be undone.",
+    refreshDone: "{ok} refreshed, {failed} failed",
+    importTitle: "Import accounts",
+    importHint:
+      "One account per line, four fields: email, password, client ID, refresh token. Existing addresses are updated rather than duplicated.",
+    importDelimiter: "Delimiter",
+    importPaste: "Paste account lines, or choose a file",
+    importFile: "Choose file",
+    importDone: "{imported} imported, {failed} skipped",
+    empty: "No accounts yet. Import a file or add one to get started.",
+    tokenHidden: "Stored on the server and never sent to this page",
+  },
+  mail: {
+    title: "Mailbox",
+    inbox: "Inbox",
+    junk: "Junk",
+    back: "Back to accounts",
+    from: "From",
+    subject: "Subject",
+    date: "Date",
+    code: "Code",
+    empty: "This folder is empty",
+    body: "Message",
+    purge: "Empty folder",
+    purgeConfirm: "Delete every message in {folder} for {email}? This cannot be undone.",
+    purgeDone: "{n} message(s) deleted",
+    loadFailed: "Could not load this mailbox",
+    transportGraph: "Served over Graph API",
+    transportImap: "Served over IMAP",
+    aiAnalyse: "Explain with AI",
+    aiTitle: "AI summary",
+    aiThinking: "Reasoning",
+    aiSummary: "Summary",
+    aiConnecting: "Connecting to the AI service...",
+    aiUnavailable: "AI is not configured on this server.",
+  },
+  settings: {
+    title: "Settings",
+    credentials: "Admin credentials",
+    currentPassword: "Current password",
+    newUsername: "New username",
+    newPassword: "New password (leave blank to keep)",
+    credentialsSaved: "Credentials updated",
+    apiKeys: "API keys",
+    apiKeysHint:
+      "Keys authenticate the mail endpoints for scripts. Send one as an X-API-Key header, or as ?password= for compatibility with the upstream project.",
+    keyName: "Name",
+    keyPrefix: "Key",
+    lastUsed: "Last used",
+    created: "Created",
+    createKey: "Create key",
+    keyOnce: "Copy this key now. It is not shown again.",
+    deleteKeyConfirm: "Delete this API key? Anything using it will stop working.",
+    server: "Server",
+    encryptionOn: "Refresh tokens are encrypted at rest",
+    encryptionOff: "Refresh tokens are stored as plain text. Set MSAPI_DATA_KEY.",
+    aiOn: "AI summarisation is configured",
+    aiOff: "AI summarisation is not configured",
+  },
+};
+
+const zh: typeof en = {
+  nav: {
+    accounts: "账户",
+    mail: "邮件",
+    settings: "设置",
+    logout: "退出登录",
+  },
+  common: {
+    save: "保存",
+    saving: "保存中...",
+    cancel: "取消",
+    close: "关闭",
+    delete: "删除",
+    edit: "编辑",
+    add: "添加",
+    refresh: "刷新",
+    search: "搜索...",
+    loading: "加载中...",
+    actions: "操作",
+    selectAll: "全选",
+    confirm: "确认",
+    copy: "复制",
+    copied: "已复制",
+    never: "从未",
+    yes: "是",
+    no: "否",
+    total: "共 {n} 条",
+    perPage: "每页 {n} 条",
+    none: "暂无数据",
+    stop: "停止",
+  },
+  login: {
+    subtitle: "登录邮箱管理面板",
+    username: "用户名",
+    password: "密码",
+    signIn: "登录",
+    signingIn: "登录中...",
+    error: "用户名或密码错误",
+    rateLimited: "尝试次数过多，请 15 分钟后重试",
+  },
+  forcePwd: {
+    title: "设置新密码",
+    subtitle: "当前仍在使用默认密码，请设置新密码后继续。",
+    newPassword: "新密码",
+    confirmPassword: "确认新密码",
+    mismatch: "两次输入的密码不一致",
+    tooShort: "密码至少需要 8 个字符",
+    submit: "更新密码",
+  },
+  accounts: {
+    title: "账户",
+    email: "邮箱",
+    clientId: "客户端 ID",
+    token: "刷新令牌",
+    remark: "备注",
+    status: "状态",
+    lastRefresh: "最近刷新",
+    enabled: "已启用",
+    disabled: "已停用",
+    import: "导入",
+    export: "导出",
+    addOne: "添加账户",
+    refreshTokens: "刷新令牌",
+    refreshing: "刷新中...",
+    viewMail: "查看邮箱",
+    deleteSelected: "删除所选",
+    deleteConfirm: "确认删除 {n} 个账户？此操作无法撤销。",
+    refreshDone: "成功 {ok} 个，失败 {failed} 个",
+    importTitle: "导入账户",
+    importHint:
+      "每行一个账户，四个字段：邮箱、密码、客户端 ID、刷新令牌。已存在的邮箱会被更新，不会重复添加。",
+    importDelimiter: "分隔符",
+    importPaste: "粘贴账户数据，或选择文件",
+    importFile: "选择文件",
+    importDone: "导入 {imported} 条，跳过 {failed} 条",
+    empty: "暂无账户，请先导入文件或手动添加。",
+    tokenHidden: "保存在服务器，不会发送到本页面",
+  },
+  mail: {
+    title: "邮箱",
+    inbox: "收件箱",
+    junk: "垃圾邮件",
+    back: "返回账户列表",
+    from: "发件人",
+    subject: "主题",
+    date: "日期",
+    code: "验证码",
+    empty: "该文件夹为空",
+    body: "正文",
+    purge: "清空文件夹",
+    purgeConfirm: "确认删除 {email} 的 {folder} 中所有邮件？此操作无法撤销。",
+    purgeDone: "已删除 {n} 封邮件",
+    loadFailed: "无法加载该邮箱",
+    transportGraph: "通过 Graph API 获取",
+    transportImap: "通过 IMAP 获取",
+    aiAnalyse: "AI 解读",
+    aiTitle: "AI 解读",
+    aiThinking: "推理过程",
+    aiSummary: "摘要",
+    aiConnecting: "正在连接 AI 解读服务...",
+    aiUnavailable: "服务器未配置 AI 功能。",
+  },
+  settings: {
+    title: "设置",
+    credentials: "管理员凭据",
+    currentPassword: "当前密码",
+    newUsername: "新用户名",
+    newPassword: "新密码（留空表示不修改）",
+    credentialsSaved: "凭据已更新",
+    apiKeys: "API 密钥",
+    apiKeysHint:
+      "API 密钥用于脚本调用邮件接口。可通过 X-API-Key 请求头发送，也可使用 ?password= 以兼容原项目。",
+    keyName: "名称",
+    keyPrefix: "密钥",
+    lastUsed: "最近使用",
+    created: "创建时间",
+    createKey: "创建密钥",
+    keyOnce: "请立即复制此密钥，它不会再次显示。",
+    deleteKeyConfirm: "确认删除此 API 密钥？使用它的程序将无法继续访问。",
+    server: "服务器",
+    encryptionOn: "刷新令牌已加密存储",
+    encryptionOff: "刷新令牌以明文存储，请设置 MSAPI_DATA_KEY。",
+    aiOn: "已配置 AI 解读",
+    aiOff: "未配置 AI 解读",
+  },
+};
+
+const messages = { en, zh };
+
+const STORAGE_KEY = "locale";
+
+function initialLocale(): Locale {
+  const saved = localStorage.getItem(STORAGE_KEY);
+  if (saved === "en" || saved === "zh") return saved;
+  // Upstream was Chinese-only, so a Chinese browser keeps that experience by default.
+  return navigator.language.toLowerCase().startsWith("zh") ? "zh" : "en";
+}
+
+export const locale = ref<Locale>(initialLocale());
+
+export function setLocale(next: Locale): void {
+  locale.value = next;
+  localStorage.setItem(STORAGE_KEY, next);
+}
+
+/**
+ * Looks up a dotted key in the active locale, falling back to the key itself so a missing
+ * string is visible in the UI rather than rendering as an empty element.
+ */
+export function t(path: string, vars?: Record<string, string | number>): string {
+  const segments = path.split(".");
+  let node: unknown = messages[locale.value];
+  for (const segment of segments) {
+    if (node && typeof node === "object" && segment in node) {
+      node = (node as Record<string, unknown>)[segment];
+    } else {
+      return path;
+    }
+  }
+  if (typeof node !== "string") return path;
+
+  if (!vars) return node;
+  return node.replace(/\{(\w+)\}/g, (whole, name: string) =>
+    name in vars ? String(vars[name]) : whole,
+  );
+}

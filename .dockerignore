@@ -1,0 +1,14 @@
+**/node_modules
+**/dist
+backend/.env
+.env
+
+# Runtime data at any depth, not just the repo root: backend/data/ holds the SQLite
+# file with refresh tokens in it and must never enter the build context or a layer.
+data/
+**/data/
+
+.git
+.gitignore
+*.md
+.github

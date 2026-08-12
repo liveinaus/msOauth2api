@@ -1,0 +1,30 @@
+services:
+  msoauth2api:
+    image: liveinaus/msoauth2api:latest
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    volumes:
+      - /docker/msoauth2api-data:/app/data
+    environment:
+      ADMIN_USERNAME: ${ADMIN_USERNAME:-admin} # change this
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-changeme} # change this
+      # Signs login tokens. Required: set to a long random string, e.g. `openssl rand -hex 32`.
+      # Compose refuses to start if it is unset.
+      JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET to a long random string, e.g. openssl rand -hex 32}
+      # Strongly recommended: encrypts the stored Microsoft refresh tokens at rest. Back this
+      # key up -- losing it means re-importing every account. See env.example.
+      MSAPI_DATA_KEY: ${MSAPI_DATA_KEY:-}
+      # Optional: upstream-compatible shared secret for the mail endpoints. Prefer API keys
+      # created in Settings.
+      PASSWORD: ${PASSWORD:-}
+      SEND_PASSWORD: ${SEND_PASSWORD:-}
+      # Optional: AI email summarisation against any OpenAI-compatible endpoint.
+      AI_API_KEY: ${AI_API_KEY:-}
+      AI_API_URL: ${AI_API_URL:-}
+      AI_MODEL: ${AI_MODEL:-}
+      # Set to the number of reverse proxy hops in front of this app, so the login rate
+      # limiter sees real client IPs.
+      TRUST_PROXY: ${TRUST_PROXY:-0}
+      # Optional: set a timezone, e.g. TZ=Australia/Sydney (defaults to UTC)
+      TZ: ${TZ:-UTC}

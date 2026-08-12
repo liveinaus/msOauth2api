@@ -1,0 +1,153 @@
+name: Publish Docker image
+
+on:
+  release:
+    types: [published] # fires when a GitHub release is published (stable tags only)
+  push:
+    tags:
+      - "dev-*" # dev builds via direct tag push only
+      - "v*-beta*" # beta builds via direct tag push only
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Image tag override (e.g. v1.0.0, dev-v1.0.0-1, or v1.0.0-beta.1)"
+        required: false
+
+jobs:
+  # Resolve the tag once so both build jobs use identical values
+  meta:
+    runs-on: ubuntu-latest
+    outputs:
+      semver: ${{ steps.resolve.outputs.semver }}
+      channel: ${{ steps.resolve.outputs.channel }}
+      ghcr_image: ${{ steps.ghcr.outputs.image }}
+    steps:
+      - name: Compute GHCR image name
+        id: ghcr
+        # GHCR requires a lowercase owner; ${VAR,,} lowercases it defensively
+        run: echo "image=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/msoauth2api" >> "$GITHUB_OUTPUT"
+
+      - name: Resolve image tag
+        id: resolve
+        env:
+          # release events don't populate GITHUB_REF_NAME with the tag reliably, so read the
+          # tag straight from the release payload when present
+          INPUT_TAG: ${{ github.event.inputs.tag }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          if [ -n "${INPUT_TAG}" ]; then
+            TAG="${INPUT_TAG}"
+          elif [ -n "${RELEASE_TAG}" ]; then
+            TAG="${RELEASE_TAG}"
+          else
+            TAG="${GITHUB_REF_NAME}"
+          fi
+          if [ -z "${TAG}" ]; then
+            echo "::error::Could not resolve an image tag" >&2
+            exit 1
+          fi
+          # dev-*   → dev channel, keep tag as-is (no v-strip)
+          # *beta*  → beta channel, strip v prefix
+          # anything else → latest channel, strip v prefix
+          if [[ "${TAG}" == dev-* ]]; then
+            echo "semver=${TAG}" >> "$GITHUB_OUTPUT"
+            echo "channel=dev" >> "$GITHUB_OUTPUT"
+          elif [[ "${TAG}" == *beta* ]]; then
+            echo "semver=${TAG#v}" >> "$GITHUB_OUTPUT"
+            echo "channel=beta" >> "$GITHUB_OUTPUT"
+          else
+            echo "semver=${TAG#v}" >> "$GITHUB_OUTPUT"
+            echo "channel=latest" >> "$GITHUB_OUTPUT"
+          fi
+
+  # Build each platform natively -- no QEMU, which is painfully slow for native addons
+  build:
+    needs: meta
+    permissions:
+      contents: read
+      packages: write # push to GHCR with the built-in GITHUB_TOKEN
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux/amd64
+            runner: ubuntu-latest
+            suffix: amd64
+          - platform: linux/arm64
+            runner: ubuntu-24.04-arm
+            suffix: arm64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push platform image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: ${{ matrix.platform }}
+          push: true
+          tags: |
+            ${{ secrets.DOCKERHUB_USERNAME }}/msoauth2api:${{ needs.meta.outputs.semver }}-${{ matrix.suffix }}
+            ${{ needs.meta.outputs.ghcr_image }}:${{ needs.meta.outputs.semver }}-${{ matrix.suffix }}
+          cache-from: type=gha,scope=${{ matrix.suffix }}
+          cache-to: type=gha,scope=${{ matrix.suffix }},mode=max
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.version=${{ needs.meta.outputs.semver }}
+            org.opencontainers.image.revision=${{ github.sha }}
+
+  # Merge the two platform images into a single multi-arch manifest
+  merge:
+    needs: [meta, build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Create and push multi-platform manifests
+        run: |
+          DH_IMG="${{ secrets.DOCKERHUB_USERNAME }}/msoauth2api"
+          GHCR_IMG="${{ needs.meta.outputs.ghcr_image }}"
+          VER="${{ needs.meta.outputs.semver }}"
+          CHANNEL="${{ needs.meta.outputs.channel }}"
+          # Always push the versioned tag + the channel alias (latest / beta / dev) to both
+          # registries. Per-platform tags were pushed to both in the build job.
+          for IMG in "${DH_IMG}" "${GHCR_IMG}"; do
+            docker buildx imagetools create \
+              -t "${IMG}:${VER}" \
+              -t "${IMG}:${CHANNEL}" \
+              "${IMG}:${VER}-amd64" \
+              "${IMG}:${VER}-arm64"
+          done
