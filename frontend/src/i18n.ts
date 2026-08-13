@@ -58,6 +58,10 @@ const en = {
   },
   accounts: {
     title: "Accounts",
+    seq: "#",
+    seqHint: "Permanent number for this address, assigned when it is added or imported",
+    hideUsed: "Hide used",
+    hideUsedHint: "Hides every address that already has a used date",
     email: "Email",
     clientId: "Client ID",
     token: "Refresh token",
@@ -214,6 +218,10 @@ const zh: typeof en = {
   },
   accounts: {
     title: "账户",
+    seq: "序号",
+    seqHint: "该邮箱的固定编号，在添加或导入时分配",
+    hideUsed: "隐藏已使用",
+    hideUsedHint: "隐藏所有已有使用时间的邮箱",
     email: "邮箱",
     clientId: "客户端 ID",
     token: "刷新令牌",

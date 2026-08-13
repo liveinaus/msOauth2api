@@ -11,7 +11,7 @@ import {
 } from "../db/accounts";
 import { getPanelSettings } from "../db/panelSettings";
 import { requireAuth } from "../middleware/auth";
-import { readMail } from "../services/mail";
+import { pickForPanel, readFolders } from "../services/mail";
 import { exchangeRefreshToken, OAuthError } from "../services/oauth";
 import { noteUsage } from "../services/usage";
 import type { Account } from "../types";
@@ -173,7 +173,10 @@ router.post("/:id/copied", (req, res) => {
 });
 
 /**
- * The newest inbox message, for the panel's quick look.
+ * The newest message for the panel's quick look, across the inbox and the junk folder.
+ *
+ * Junk is included because a verification mail from a service the mailbox has never heard
+ * from is exactly what Outlook filters, and a code sitting in junk is no use to anybody.
  *
  * Separate from /mail-new so the panel does not have to hold or pass credentials, and so
  * the reply carries the account back with its usage date already updated -- the caller
@@ -188,16 +191,16 @@ router.get("/:id/latest-mail", async (req, res) => {
   }
 
   try {
-    const result = await readMail(
+    const result = await readFolders(
       { email: account.email, clientId: account.clientId, refreshToken: account.refreshToken },
-      "INBOX",
+      ["INBOX", "Junk"],
       1,
     );
     if (result.rotatedRefreshToken) recordRefresh(id, result.rotatedRefreshToken, null);
     noteUsage(account.email, result.messages);
 
     res.json({
-      message: result.messages[0] ?? null,
+      message: pickForPanel(result.messages),
       transport: result.transport,
       // Non-null: the row was read at the top of this handler and nothing deletes it here.
       account: toPublic(getAccount(id)!),

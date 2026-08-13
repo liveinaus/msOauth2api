@@ -75,6 +75,8 @@ export type MailMessage = {
   html: string;
   date: string;
   code?: string;
+  /** Set only by the panel's latest-mail call, which reads more than one folder. */
+  mailbox?: Mailbox;
 };
 
 export type ApiKeyView = {

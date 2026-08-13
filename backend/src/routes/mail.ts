@@ -97,7 +97,7 @@ async function handleMailNew(req: Request, res: Response): Promise<void> {
     const credentials = resolveCredentials(params);
     const result = await readMail(credentials, mailbox, 1);
     persistRotation(credentials.email, result.rotatedRefreshToken);
-    if (mailbox === "INBOX") noteUsage(credentials.email, result.messages);
+    noteUsage(credentials.email, result.messages);
 
     const latest = result.messages[0];
 
@@ -145,7 +145,7 @@ async function handleMailAll(req: Request, res: Response): Promise<void> {
 
     const result = await readMail(credentials, mailbox, limit);
     persistRotation(credentials.email, result.rotatedRefreshToken);
-    if (mailbox === "INBOX") noteUsage(credentials.email, result.messages);
+    noteUsage(credentials.email, result.messages);
 
     res.status(200).json(result.messages);
   } catch (error) {

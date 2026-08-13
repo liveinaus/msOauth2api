@@ -4,6 +4,10 @@
       <span class="page-title">{{ t("accounts.title") }}</span>
       <div class="btn-row">
         <input v-model="search" class="form-input" style="width: 200px" :placeholder="t('common.search')" />
+        <label class="check-row" :title="t('accounts.hideUsedHint')">
+          <input v-model="hideUsed" type="checkbox" />
+          {{ t("accounts.hideUsed") }}
+        </label>
         <button class="btn" @click="showImport = true">
           <i class="fa-solid fa-file-import"></i> {{ t("accounts.import") }}
         </button>
@@ -33,8 +37,9 @@
             <th class="checkbox-cell">
               <input type="checkbox" :checked="allVisibleSelected" @change="toggleAll" />
             </th>
+            <th class="seq-cell">{{ t("accounts.seq") }}</th>
             <th>{{ t("accounts.email") }}</th>
-            <th>{{ t("accounts.code") }}</th>
+            <th class="code-cell">{{ t("accounts.code") }}</th>
             <th v-if="panel.showClientId">{{ t("accounts.clientId") }}</th>
             <th v-if="panel.showRefreshToken">{{ t("accounts.token") }}</th>
             <th>{{ t("accounts.status") }}</th>
@@ -48,8 +53,9 @@
             <td class="checkbox-cell">
               <input type="checkbox" :checked="selected.has(account.id)" @change="toggle(account.id)" />
             </td>
+            <td class="seq-cell mono muted" :title="t('accounts.seqHint')">{{ account.id }}</td>
             <td>
-              <div class="email-cell">
+              <div class="cell-row email-cell">
                 <span class="clickable" :title="t('accounts.copyEmail')" @click="copyEmail(account)">
                   {{ account.email }}
                 </span>
@@ -59,31 +65,33 @@
               </div>
             </td>
             <td class="code-cell" @mouseenter="showPreview(account.id, $event)" @mouseleave="hidePreview">
-              <template v-if="codeFor(account.id)">
-                <span
-                  class="code-chip clickable"
-                  :title="t('accounts.codeHover')"
-                  @click="openCached(account)"
-                >
-                  {{ codeFor(account.id) }}
+              <div class="cell-row">
+                <template v-if="codeFor(account.id)">
+                  <span
+                    class="code-chip clickable"
+                    :title="t('accounts.codeHover')"
+                    @click="openCached(account)"
+                  >
+                    {{ codeFor(account.id) }}
+                  </span>
+                  <button
+                    class="btn btn-sm"
+                    :title="t('accounts.copyCode')"
+                    @click="copyCode(account.id, codeFor(account.id)!)"
+                  >
+                    <i :class="codeCopiedId === account.id ? 'fa-solid fa-check' : 'fa-regular fa-copy'"></i>
+                  </button>
+                  <i
+                    v-if="isPolling(account.id)"
+                    class="fa-solid fa-circle-notch fa-spin muted"
+                    :title="countdown(account.id)"
+                  ></i>
+                </template>
+                <span v-else-if="isPolling(account.id)" class="muted">
+                  <i class="fa-solid fa-circle-notch fa-spin"></i> {{ countdown(account.id) }}
                 </span>
-                <button
-                  class="btn btn-sm"
-                  :title="t('accounts.copyCode')"
-                  @click="copyCode(account.id, codeFor(account.id)!)"
-                >
-                  <i :class="codeCopiedId === account.id ? 'fa-solid fa-check' : 'fa-regular fa-copy'"></i>
-                </button>
-                <i
-                  v-if="isPolling(account.id)"
-                  class="fa-solid fa-circle-notch fa-spin muted"
-                  :title="countdown(account.id)"
-                ></i>
-              </template>
-              <span v-else-if="isPolling(account.id)" class="muted">
-                <i class="fa-solid fa-circle-notch fa-spin"></i> {{ countdown(account.id) }}
-              </span>
-              <span v-else class="muted">—</span>
+                <span v-else class="muted">—</span>
+              </div>
             </td>
             <td v-if="panel.showClientId" class="mono">{{ account.clientId }}</td>
             <td v-if="panel.showRefreshToken" class="mono" :title="t('accounts.tokenHidden')">
@@ -159,7 +167,10 @@
         :style="{ top: `${preview.top}px`, left: `${preview.left}px` }"
       >
         <div class="code-popover-head">{{ preview.subject || "(no subject)" }}</div>
-        <div class="code-popover-meta">{{ preview.send }} · {{ preview.date }}</div>
+        <div class="code-popover-meta">
+          {{ preview.send }} · {{ preview.date }}
+          <span v-if="preview.junk" class="badge badge-off">{{ t("mail.junk") }}</span>
+        </div>
         <div class="code-popover-body">{{ preview.text }}</div>
       </div>
     </Teleport>
@@ -183,6 +194,9 @@
               </div>
               <div>
                 <strong>{{ t("mail.date") }}:</strong> {{ formatMailDate(latestMail.date) }}
+                <span v-if="latestMail.mailbox === 'Junk'" class="badge badge-off">
+                  {{ t("mail.junk") }}
+                </span>
               </div>
               <div v-if="latestMail.code">
                 <strong>{{ t("mail.code") }}:</strong>
@@ -319,6 +333,7 @@ import {
 } from "../api/client";
 import { t } from "../i18n";
 import { copyText } from "../utils/clipboard";
+import { persistentRef } from "../utils/prefs";
 import {
   clock,
   isPolling,
@@ -338,9 +353,12 @@ const importing = ref(false);
 const error = ref("");
 const notice = ref("");
 
-const search = ref("");
+// Filters persist across reloads; the page number deliberately does not, since it means
+// nothing once the list behind it has changed.
+const search = persistentRef("accounts.search", "");
+const hideUsed = persistentRef("accounts.hideUsed", false);
 const page = ref(1);
-const pageSize = ref(25);
+const pageSize = persistentRef("accounts.pageSize", 25);
 const selected = ref(new Set<number>());
 
 const panel = ref<PanelSettings>({ ...DEFAULT_PANEL_SETTINGS });
@@ -353,6 +371,7 @@ const preview = ref<{
   subject: string;
   send: string;
   date: string;
+  junk: boolean;
   text: string;
 } | null>(null);
 const latestBusyId = ref<number | null>(null);
@@ -373,13 +392,15 @@ const draft = ref({ email: "", clientId: "", refreshToken: "", remark: "" });
 
 const filtered = computed(() => {
   const term = search.value.trim().toLowerCase();
-  if (!term) return accounts.value;
-  return accounts.value.filter(
-    (a) =>
+  return accounts.value.filter((a) => {
+    if (hideUsed.value && a.lastUsedAt !== null) return false;
+    if (!term) return true;
+    return (
       a.email.toLowerCase().includes(term) ||
       a.clientId.toLowerCase().includes(term) ||
-      (a.remark ?? "").toLowerCase().includes(term),
-  );
+      (a.remark ?? "").toLowerCase().includes(term)
+    );
+  });
 });
 
 const pageItems = computed(() => {
@@ -531,6 +552,7 @@ function showPreview(id: number, event: MouseEvent): void {
     subject: message.subject,
     send: message.send,
     date: formatMailDate(message.date),
+    junk: message.mailbox === "Junk",
     text: previewText(message),
   };
 }

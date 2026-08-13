@@ -156,6 +156,7 @@ import {
   type Mailbox,
 } from "../api/client";
 import { t } from "../i18n";
+import { persistentRef } from "../utils/prefs";
 
 const props = defineProps<{ email: string }>();
 const router = useRouter();
@@ -167,7 +168,9 @@ const loading = ref(false);
 const error = ref("");
 const notice = ref("");
 const page = ref(1);
-const pageSize = ref(25);
+// Shares nothing with the accounts list: a mailbox page and an account page are read at
+// different sizes. The folder tab is left alone, being navigation rather than a filter.
+const pageSize = persistentRef("mail.pageSize", 25);
 
 const active = ref<MailMessage | null>(null);
 const frameUrl = ref("");

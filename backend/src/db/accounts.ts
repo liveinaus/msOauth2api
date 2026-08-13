@@ -64,9 +64,38 @@ export function getAccountByEmail(email: string): Account | undefined {
  * Inserts, or updates the credentials of an existing row with the same address. Import
  * files routinely carry an address that is already on the panel with a newer token, and
  * upstream's importer simply appended a duplicate.
+ *
+ * The known-address case is an UPDATE rather than an upsert because AUTOINCREMENT consumes
+ * an id even when the insert loses to ON CONFLICT: re-importing a 500-line file would step
+ * the counter 500 places, and that counter is the number the panel shows against each
+ * address. The insert below keeps its ON CONFLICT clause anyway, so if a row appears
+ * between the lookup and the write the result is still a correct update.
  */
 export function upsertAccount(input: AccountInput): Account {
   const now = Date.now();
+  const existing = getAccountByEmail(input.email);
+
+  if (existing) {
+    db.prepare(
+      `UPDATE accounts SET
+         password      = @password,
+         client_id     = @clientId,
+         refresh_token = @refreshToken,
+         remark        = COALESCE(@remark, remark),
+         updated_at    = @now
+       WHERE id = @id`,
+    ).run({
+      id: existing.id,
+      password: input.password ? encryptSecret(input.password) : null,
+      clientId: input.clientId,
+      refreshToken: encryptSecret(input.refreshToken),
+      remark: input.remark ?? null,
+      now,
+    });
+    // Non-null: the row was just read and updated by id.
+    return getAccount(existing.id)!;
+  }
+
   db.prepare(
     `INSERT INTO accounts (email, password, client_id, refresh_token, remark, created_at, updated_at)
      VALUES (@email, @password, @clientId, @refreshToken, @remark, @now, @now)

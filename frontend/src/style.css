@@ -382,8 +382,13 @@ body {
   color: #4b5563;
 }
 
+.table tbody tr:nth-child(even) {
+  background: #fbfcfd;
+}
+
+/* After the stripe, so hovering a row still reads as hovered on both colours. */
 .table tbody tr:hover {
-  background: #fafbfc;
+  background: #eef4ff;
 }
 
 .table td.wrap {
@@ -400,7 +405,11 @@ body {
   text-decoration: underline;
 }
 
-.email-cell {
+/*
+  Laid out on a wrapper, never on the td itself: a table cell set to display:flex stops
+  being a table cell, and the row's columns come apart.
+*/
+.cell-row {
   display: flex;
   align-items: center;
   gap: 6px;
@@ -422,10 +431,15 @@ body {
 }
 
 .code-cell {
-  display: flex;
-  align-items: center;
-  gap: 6px;
   white-space: nowrap;
+  width: 1%;
+}
+
+/* Scoped under .table so it beats the shared left alignment on th/td. */
+.table .seq-cell {
+  white-space: nowrap;
+  width: 1%;
+  text-align: right;
 }
 
 .code-cell .btn {
@@ -443,6 +457,12 @@ body {
   gap: 8px;
   font-size: 13px;
   margin-bottom: 8px;
+  white-space: nowrap;
+}
+
+/* Inline in a toolbar it is one control among buttons, not a stacked form field. */
+.btn-row .check-row {
+  margin-bottom: 0;
 }
 
 /* Teleported out of the table, so it needs its own stacking context and shadow. */
