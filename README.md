@@ -143,6 +143,86 @@ curl -H "X-API-Key: msk_..." \
 `code` is the one field added to upstream's shape, carrying the extracted verification code
 when the message has one.
 
+## Address pool API
+
+For systems that sign up for a service and then wait for its verification code. Ask for an
+address not yet used for a **type** (`Telegram`, `Discord`, anything you like), hand it to
+that service, then poll for the code. Types are free text, matched case-insensitively, and
+an address used for one type stays available for every other.
+
+All of these need an API key, like the mail endpoints.
+
+| Endpoint                            | Purpose                                      |
+| ----------------------------------- | -------------------------------------------- |
+| `GET/POST /api/get-available-email` | Leases the next address unused for `type`    |
+| `GET/POST /api/get-code`            | The code for an address, if one has arrived  |
+| `POST /api/confirm-email`           | Retires an address for a type without a code |
+| `POST /api/release-email`           | Hands a leased address back early            |
+| `GET /api/email-status`             | What an address has been used for            |
+| `GET /api/pool-status`              | Remaining capacity for a type                |
+
+### Leases
+
+An address is claimed the moment it is handed out, so two callers cannot be given the same
+one, but the claim expires (15 minutes by default, set under Settings). If no code ever
+arrives the address returns to the pool, so an abandoned signup does not consume it. Finding
+a code confirms the claim permanently, as does `confirm-email`.
+
+Addresses that are disabled, or whose last token refresh failed, are never handed out: an
+address that cannot receive mail is worse than none.
+
+### Typical run
+
+```bash
+# 1. Take an address for this signup.
+curl -H "X-API-Key: msk_..." \
+  "http://localhost:3000/api/get-available-email?type=Telegram"
+# {"email":"a@b.com","type":"telegram","leasedAt":1786…,"leaseExpiresAt":1786…,"remaining":42}
+
+# 2. Sign up with a@b.com, then poll. 200 either way; read `status`.
+curl -H "X-API-Key: msk_..." \
+  "http://localhost:3000/api/get-code?email=a@b.com&type=Telegram&from=telegram"
+# {"status":"pending","email":"a@b.com","type":"telegram","query":{…}}
+# {"status":"found","code":"483920","message":{"from":"noreply@telegram.org",
+#  "subject":"Login code","date":"2026-08-13T12:05:00Z","mailbox":"Junk"}}
+
+# 3. Only if you give up, so the address is not wasted.
+curl -X POST -H "X-API-Key: msk_..." -H "Content-Type: application/json" \
+  -d '{"email":"a@b.com","type":"Telegram"}' \
+  http://localhost:3000/api/release-email
+```
+
+### Parameters
+
+| Name              | Endpoints                             | Notes                                                              |
+| ----------------- | ------------------------------------- | ------------------------------------------------------------------ |
+| `type`            | all except `get-code`, where optional | The integration label, e.g. `Telegram`                             |
+| `email`           | all except `get-available-email`      | Must be a stored account                                           |
+| `from`, `subject` | `get-code`                            | Case-insensitive substring filters on sender and subject           |
+| `since`           | `get-code`                            | Epoch ms or ISO date. Defaults to the lease time when `type` given |
+| `limit`           | `get-code`                            | Messages scanned per folder, default 10, capped at 50              |
+
+`get-code` searches the inbox and the junk folder, because verification mail from an unknown
+sender is exactly what Outlook files as junk. Pass `type` wherever you can: it scopes the
+search to mail that arrived after the address was leased, which is what stops a previous
+run's code being handed back as this run's.
+
+### Statuses
+
+`get-code` answers `200` with `status: "found"` or `status: "pending"`, so a poller can tell
+"not yet" from a real failure. `404` means the address is not a stored account. Exhausting
+the pool gives `409` from `get-available-email`, with the counts:
+
+```json
+{
+  "error": "No address available for type \"telegram\"",
+  "type": "telegram",
+  "available": 0,
+  "leased": 12,
+  "confirmed": 88
+}
+```
+
 #### One inherited quirk
 
 Upstream's `mail-new` answered with an **array of one** on the Graph path but a **bare

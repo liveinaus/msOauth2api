@@ -54,7 +54,35 @@ db.exec(`
     created_at   INTEGER NOT NULL
   );
 
+  -- Optional configuration for a type. A type works without a row here; this only tells the
+  -- server how to recognise that service's mail and pull the code out of it.
+  CREATE TABLE IF NOT EXISTS usage_types (
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    name           TEXT NOT NULL UNIQUE,
+    label          TEXT,
+    from_filter    TEXT,
+    subject_filter TEXT,
+    code_pattern   TEXT,
+    created_at     INTEGER NOT NULL,
+    updated_at     INTEGER NOT NULL
+  );
+
+  -- One row per address per integration type ("telegram", "discord"). A row that is leased
+  -- but not confirmed expires; a confirmed row retires that address for that type.
+  CREATE TABLE IF NOT EXISTS account_usages (
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    account_id       INTEGER NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+    type             TEXT NOT NULL,
+    leased_at        INTEGER NOT NULL,
+    lease_expires_at INTEGER,
+    confirmed_at     INTEGER,
+    code             TEXT,
+    code_at          INTEGER,
+    UNIQUE(account_id, type)
+  );
+
   CREATE INDEX IF NOT EXISTS idx_accounts_email ON accounts(email);
+  CREATE INDEX IF NOT EXISTS idx_usages_type ON account_usages(type, confirmed_at, lease_expires_at);
   CREATE INDEX IF NOT EXISTS idx_api_keys_prefix ON api_keys(key_prefix);
 `);
 

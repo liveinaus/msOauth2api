@@ -3,6 +3,7 @@ import AccountsView from "../views/AccountsView.vue";
 import LoginView from "../views/LoginView.vue";
 import MailView from "../views/MailView.vue";
 import SettingsView from "../views/SettingsView.vue";
+import TypesView from "../views/TypesView.vue";
 
 const router = createRouter({
   history: createWebHistory(),
@@ -10,6 +11,7 @@ const router = createRouter({
     { path: "/login", name: "login", component: LoginView, meta: { public: true } },
     { path: "/", name: "accounts", component: AccountsView },
     { path: "/mail/:email", name: "mail", component: MailView, props: true },
+    { path: "/types", name: "types", component: TypesView },
     { path: "/settings", name: "settings", component: SettingsView },
     { path: "/:pathMatch(.*)*", redirect: "/" },
   ],

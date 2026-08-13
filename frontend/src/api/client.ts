@@ -52,8 +52,20 @@ export function errorMessage(error: unknown, fallback: string): string {
 
 // ── Types mirroring the backend responses ─────────────────────────────────────
 
+/** A type this address has been handed out for. Expired leases are not sent. */
+export type AccountUsageView = {
+  type: string;
+  /** When the address was claimed for this type, in server time. */
+  leasedAt: number;
+  confirmedAt: number | null;
+  /** Set only while a lease is still running, i.e. handed out but no code yet. */
+  leaseExpiresAt: number | null;
+  code: string | null;
+};
+
 export type AccountView = {
   id: number;
+  usages: AccountUsageView[];
   email: string;
   clientId: string;
   hasPassword: boolean;
@@ -102,6 +114,7 @@ export type UsageMode = "copy" | "mail";
 export type PanelSettings = {
   pollDurationMinutes: number;
   pollIntervalSeconds: number;
+  leaseMinutes: number;
   usageMode: UsageMode;
   showClientId: boolean;
   showRefreshToken: boolean;
@@ -110,6 +123,7 @@ export type PanelSettings = {
 export const DEFAULT_PANEL_SETTINGS: PanelSettings = {
   pollDurationMinutes: 5,
   pollIntervalSeconds: 20,
+  leaseMinutes: 15,
   usageMode: "mail",
   showClientId: false,
   showRefreshToken: false,
@@ -187,9 +201,12 @@ export async function deleteAccounts(ids: number[]) {
   return data;
 }
 
-/** Stamps the copy time, which is what the "used" column measures arrivals against. */
-export async function markAccountCopied(id: number) {
-  const { data } = await api.post<AccountView>(`/accounts/${id}/copied`);
+/**
+ * Stamps the copy time, which is what the "used" column measures arrivals against. With a
+ * type, only that type is claimed and the account-wide dates are left alone.
+ */
+export async function markAccountCopied(id: number, type?: string) {
+  const { data } = await api.post<AccountView>(`/accounts/${id}/copied`, type ? { type } : {});
   return data;
 }
 
@@ -199,8 +216,10 @@ export type LatestMailView = {
   account: AccountView;
 };
 
-export async function fetchLatestMail(id: number) {
-  const { data } = await api.get<LatestMailView>(`/accounts/${id}/latest-mail`);
+export async function fetchLatestMail(id: number, type?: string) {
+  const { data } = await api.get<LatestMailView>(`/accounts/${id}/latest-mail`, {
+    params: type ? { type } : undefined,
+  });
   return data;
 }
 
@@ -245,6 +264,50 @@ export async function createApiKeyRequest(name: string) {
 
 export async function deleteApiKeyRequest(id: number) {
   await api.delete(`/api-keys/${id}`);
+}
+
+export type UsageTypeView = {
+  id: number;
+  name: string;
+  label: string | null;
+  fromFilter: string | null;
+  subjectFilter: string | null;
+  codePattern: string | null;
+  createdAt: number;
+  updatedAt: number;
+};
+
+export type UsageTypeInput = {
+  name: string;
+  label?: string | null;
+  fromFilter?: string | null;
+  subjectFilter?: string | null;
+  codePattern?: string | null;
+};
+
+export async function fetchUsageTypes() {
+  const { data } = await api.get<UsageTypeView[]>("/types");
+  return data;
+}
+
+export async function createUsageType(input: UsageTypeInput) {
+  const { data } = await api.post<UsageTypeView>("/types", input);
+  return data;
+}
+
+export async function updateUsageType(id: number, patch: Partial<UsageTypeInput>) {
+  const { data } = await api.patch<UsageTypeView>(`/types/${id}`, patch);
+  return data;
+}
+
+export async function deleteUsageType(id: number) {
+  await api.delete(`/types/${id}`);
+}
+
+/** Marks or unmarks an address as used for a type by hand. */
+export async function setAccountUsage(id: number, type: string, used: boolean) {
+  const { data } = await api.post<AccountView>(`/accounts/${id}/usage`, { type, used });
+  return data;
 }
 
 export async function fetchPanelSettings() {

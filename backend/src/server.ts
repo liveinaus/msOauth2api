@@ -14,8 +14,10 @@ import aiRouter from "./routes/ai";
 import apiKeysRouter from "./routes/apikeys";
 import authRouter from "./routes/auth";
 import healthRouter from "./routes/health";
+import integrationRouter from "./routes/integration";
 import mailRouter from "./routes/mail";
 import settingsRouter from "./routes/settings";
+import typesRouter from "./routes/types";
 
 // Fail fast on a missing or placeholder secret, before anything is served.
 getJwtSecret();
@@ -57,6 +59,12 @@ const MACHINE_ROUTES = new Set([
   "/api/process-inbox",
   "/api/process-junk",
   "/api/send-mail",
+  "/api/get-available-email",
+  "/api/get-code",
+  "/api/confirm-email",
+  "/api/release-email",
+  "/api/email-status",
+  "/api/pool-status",
 ]);
 
 app.use(
@@ -112,7 +120,9 @@ app.use("/api/auth", authRouter);
 app.use("/api/accounts", accountsRouter);
 app.use("/api/api-keys", apiKeysRouter);
 app.use("/api/settings", settingsRouter);
+app.use("/api/types", typesRouter);
 app.use("/api", mailRouter);
+app.use("/api", integrationRouter);
 app.use("/api", aiRouter);
 
 // Anything under /api that got this far does not exist. Without this the SPA fallback

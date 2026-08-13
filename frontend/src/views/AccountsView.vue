@@ -4,9 +4,20 @@
       <span class="page-title">{{ t("accounts.title") }}</span>
       <div class="btn-row">
         <input v-model="search" class="form-input" style="width: 200px" :placeholder="t('common.search')" />
-        <label class="check-row" :title="t('accounts.hideUsedHint')">
+        <select
+          v-model="activeType"
+          class="form-input"
+          style="width: 150px"
+          :title="t('accounts.typeFilterHint')"
+        >
+          <option value="">{{ t("accounts.allTypes") }}</option>
+          <option v-for="item in usageTypes" :key="item.id" :value="item.name">
+            {{ item.label || item.name }}
+          </option>
+        </select>
+        <label class="check-row" :title="hideUsedHint">
           <input v-model="hideUsed" type="checkbox" />
-          {{ t("accounts.hideUsed") }}
+          {{ activeType ? t("accounts.hideUsedForType", { type: activeType }) : t("accounts.hideUsed") }}
         </label>
         <button class="btn" @click="showImport = true">
           <i class="fa-solid fa-file-import"></i> {{ t("accounts.import") }}
@@ -42,6 +53,7 @@
             <th class="code-cell">{{ t("accounts.code") }}</th>
             <th v-if="panel.showClientId">{{ t("accounts.clientId") }}</th>
             <th v-if="panel.showRefreshToken">{{ t("accounts.token") }}</th>
+            <th>{{ t("accounts.usedFor") }}</th>
             <th>{{ t("accounts.status") }}</th>
             <th>{{ t("accounts.lastRefresh") }}</th>
             <th>{{ t("accounts.lastUsed") }}</th>
@@ -98,6 +110,28 @@
               {{ account.tokenHint }}
             </td>
             <td>
+              <div class="cell-row">
+                <span
+                  v-for="usage in account.usages"
+                  :key="usage.type"
+                  class="badge"
+                  :class="usage.confirmedAt ? 'badge-type' : 'badge-off'"
+                  :title="usageTitle(usage)"
+                >
+                  {{ usage.type }}
+                </span>
+                <span v-if="!account.usages.length" class="muted">—</span>
+                <button
+                  v-if="usageTypes.length"
+                  class="btn btn-sm"
+                  :title="t('accounts.markUsedFor')"
+                  @click="openMarker(account.id, $event)"
+                >
+                  <i class="fa-solid fa-tags"></i>
+                </button>
+              </div>
+            </td>
+            <td>
               <span v-if="account.disabled" class="badge badge-off">{{ t("accounts.disabled") }}</span>
               <span
                 v-else-if="account.lastRefreshError"
@@ -110,11 +144,27 @@
             </td>
             <td>{{ formatTime(account.lastRefreshAt) }}</td>
             <td>
-              <span v-if="account.lastUsedAt">{{ formatTime(account.lastUsedAt) }}</span>
-              <span v-else-if="account.lastCopiedAt" class="muted" :title="t('accounts.usePending')">
-                {{ t("accounts.copiedAt", { time: formatTime(account.lastCopiedAt) }) }}
-              </span>
-              <span v-else class="muted">{{ t("common.never") }}</span>
+              <!-- Scoped to the selected type: with one chosen, "used" means used for it. -->
+              <template v-if="activeType">
+                <span v-if="usageFor(account)?.confirmedAt">
+                  {{ formatTime(usageFor(account)!.confirmedAt) }}
+                </span>
+                <span
+                  v-else-if="usageFor(account)"
+                  class="muted"
+                  :title="t('accounts.usePendingType', { type: activeType })"
+                >
+                  {{ t("accounts.claimed") }}
+                </span>
+                <span v-else class="muted">{{ t("common.never") }}</span>
+              </template>
+              <template v-else>
+                <span v-if="account.lastUsedAt">{{ formatTime(account.lastUsedAt) }}</span>
+                <span v-else-if="account.lastCopiedAt" class="muted" :title="t('accounts.usePending')">
+                  {{ t("accounts.copiedAt", { time: formatTime(account.lastCopiedAt) }) }}
+                </span>
+                <span v-else class="muted">{{ t("common.never") }}</span>
+              </template>
             </td>
             <td>
               <div class="btn-row">
@@ -172,6 +222,23 @@
           <span v-if="preview.junk" class="badge badge-off">{{ t("mail.junk") }}</span>
         </div>
         <div class="code-popover-body">{{ preview.text }}</div>
+      </div>
+    </Teleport>
+
+    <!-- Mark used for a type, by hand -->
+    <Teleport to="body">
+      <div v-if="marker" class="popover-backdrop" @click="marker = null">
+        <div class="type-menu" :style="{ top: `${marker.top}px`, left: `${marker.left}px` }" @click.stop>
+          <div class="type-menu-head">{{ t("accounts.markUsedFor") }}</div>
+          <label v-for="item in usageTypes" :key="item.id" class="check-row">
+            <input
+              type="checkbox"
+              :checked="hasUsage(marker.accountId, item.name)"
+              @change="toggleUsage(marker.accountId, item.name, ($event.target as HTMLInputElement).checked)"
+            />
+            {{ item.label || item.name }}
+          </label>
+        </div>
       </div>
     </Teleport>
 
@@ -322,14 +389,18 @@ import {
   errorMessage,
   fetchAccounts,
   fetchPanelSettings,
+  fetchUsageTypes,
   importAccounts,
   markAccountCopied,
   refreshAccountTokens,
+  setAccountUsage,
   updateAccount,
   DEFAULT_PANEL_SETTINGS,
+  type AccountUsageView,
   type AccountView,
   type MailMessage,
   type PanelSettings,
+  type UsageTypeView,
 } from "../api/client";
 import { t } from "../i18n";
 import { copyText } from "../utils/clipboard";
@@ -357,6 +428,10 @@ const notice = ref("");
 // nothing once the list behind it has changed.
 const search = persistentRef("accounts.search", "");
 const hideUsed = persistentRef("accounts.hideUsed", false);
+/** Empty means no type is in play, and "used" keeps its account-wide meaning. */
+const activeType = persistentRef("accounts.type", "");
+const usageTypes = ref<UsageTypeView[]>([]);
+const marker = ref<{ accountId: number; top: number; left: number } | null>(null);
 const page = ref(1);
 const pageSize = persistentRef("accounts.pageSize", 25);
 const selected = ref(new Set<number>());
@@ -390,15 +465,33 @@ const importText = ref("");
 const importErrors = ref<{ line: number; reason: string }[]>([]);
 const draft = ref({ email: "", clientId: "", refreshToken: "", remark: "" });
 
+const hideUsedHint = computed(() =>
+  activeType.value
+    ? t("accounts.hideUsedForTypeHint", { type: activeType.value })
+    : t("accounts.hideUsedHint"),
+);
+
+/** The selected type's record against an account, if it has one. */
+function usageFor(account: AccountView): AccountUsageView | undefined {
+  return activeType.value ? account.usages.find((u) => u.type === activeType.value) : undefined;
+}
+
 const filtered = computed(() => {
   const term = search.value.trim().toLowerCase();
   return accounts.value.filter((a) => {
-    if (hideUsed.value && a.lastUsedAt !== null) return false;
+    // With a type selected the filter is about that type alone, so an address used for
+    // something else still shows: it is unused for this one, which is what matters.
+    if (hideUsed.value) {
+      if (activeType.value) {
+        if (usageFor(a)?.confirmedAt) return false;
+      } else if (a.lastUsedAt !== null) return false;
+    }
     if (!term) return true;
     return (
       a.email.toLowerCase().includes(term) ||
       a.clientId.toLowerCase().includes(term) ||
-      (a.remark ?? "").toLowerCase().includes(term)
+      (a.remark ?? "").toLowerCase().includes(term) ||
+      a.usages.some((u) => u.type.includes(term))
     );
   });
 });
@@ -447,6 +540,16 @@ onMounted(async () => {
     panel.value = await fetchPanelSettings();
   } catch {
     // The defaults are the shipped ones, so a failure here only costs custom poll timings.
+  }
+  try {
+    usageTypes.value = await fetchUsageTypes();
+    // A type deleted since this browser last stored its filter would otherwise leave the
+    // table filtering on something no longer offered in the dropdown.
+    if (activeType.value && !usageTypes.value.some((item) => item.name === activeType.value)) {
+      activeType.value = "";
+    }
+  } catch {
+    usageTypes.value = [];
   }
 });
 
@@ -498,17 +601,45 @@ async function copyEmail(account: AccountView): Promise<void> {
   }, 2000);
 
   try {
-    const updated = await markAccountCopied(account.id);
+    const updated = await markAccountCopied(account.id, activeType.value || undefined);
     replaceAccount(updated);
     startPolling(account.id, {
       durationMs: panel.value.pollDurationMinutes * 60_000,
       intervalMs: panel.value.pollIntervalSeconds * 1000,
-      // The server's copy time, so the "did this arrive after the copy?" test is not
-      // decided by whatever this browser's clock happens to say.
-      since: updated.lastCopiedAt ?? Date.now(),
+      // The server's own time, so the "did this arrive after the copy?" test is not decided
+      // by whatever this browser's clock happens to say. With a type, that is the claim it
+      // just made for it.
+      since:
+        (activeType.value
+          ? updated.usages.find((u) => u.type === activeType.value)?.leasedAt
+          : updated.lastCopiedAt) ?? Date.now(),
+      type: activeType.value || undefined,
     });
   } catch (err) {
     error.value = errorMessage(err, "Could not record the copy");
+  }
+}
+
+function hasUsage(accountId: number, type: string): boolean {
+  const account = accounts.value.find((a) => a.id === accountId);
+  return Boolean(account?.usages.some((u) => u.type === type && u.confirmedAt));
+}
+
+function openMarker(accountId: number, event: MouseEvent): void {
+  const rect = (event.currentTarget as HTMLElement).getBoundingClientRect();
+  const WIDTH = 220;
+  marker.value = {
+    accountId,
+    top: Math.min(rect.bottom + 6, window.innerHeight - 60),
+    left: Math.max(8, Math.min(rect.left, window.innerWidth - WIDTH - 8)),
+  };
+}
+
+async function toggleUsage(accountId: number, type: string, used: boolean): Promise<void> {
+  try {
+    replaceAccount(await setAccountUsage(accountId, type, used));
+  } catch (err) {
+    error.value = errorMessage(err, "Could not update the type");
   }
 }
 
@@ -591,7 +722,7 @@ async function openLatest(account: AccountView): Promise<void> {
   latestMail.value = null;
   revokeLatestFrame();
 
-  await refreshLatest(account.id);
+  await refreshLatest(account.id, activeType.value || undefined);
   const entry = latestFor(account.id);
 
   latestBusyId.value = null;
@@ -734,6 +865,20 @@ async function refreshTokens(): Promise<void> {
 
 function formatTime(value: number | null): string {
   return value ? new Date(value).toLocaleString() : t("common.never");
+}
+
+/** Confirmed types read as "used for X on <date>"; a live lease says it is still out. */
+function usageTitle(usage: AccountUsageView): string {
+  if (usage.confirmedAt) {
+    const when = formatTime(usage.confirmedAt);
+    return usage.code
+      ? t("accounts.usedForConfirmedCode", { type: usage.type, time: when, code: usage.code })
+      : t("accounts.usedForConfirmed", { type: usage.type, time: when });
+  }
+  return t("accounts.usedForLeased", {
+    type: usage.type,
+    time: formatTime(usage.leaseExpiresAt),
+  });
 }
 
 function formatMailDate(value: string): string {

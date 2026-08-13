@@ -10,9 +10,19 @@ import {
   upsertAccount,
 } from "../db/accounts";
 import { getPanelSettings } from "../db/panelSettings";
+import {
+  clearUsage,
+  confirmUsage,
+  getUsage,
+  leaseSpecific,
+  listUsages,
+  listUsagesByAccount,
+  type Usage,
+} from "../db/usages";
 import { requireAuth } from "../middleware/auth";
 import { pickForPanel, readFolders } from "../services/mail";
 import { exchangeRefreshToken, OAuthError } from "../services/oauth";
+import { findForType, rulesFor } from "../services/typeRules";
 import { noteUsage } from "../services/usage";
 import type { Account } from "../types";
 
@@ -26,8 +36,25 @@ router.use(requireAuth);
  * through the DOM, an extension or a screenshot -- upstream held every token in
  * localStorage and rendered a truncated form into the accounts table.
  */
-function toPublic(account: Account) {
+/**
+ * Which types this address has been handed out for. An expired lease is dropped rather than
+ * shown: the address is back in the pool, so claiming otherwise in the panel would be a lie.
+ */
+function usageView(usages: Usage[], now: number) {
+  return usages
+    .filter((u) => u.confirmedAt !== null || (u.leaseExpiresAt ?? 0) > now)
+    .map((u) => ({
+      type: u.type,
+      leasedAt: u.leasedAt,
+      confirmedAt: u.confirmedAt,
+      leaseExpiresAt: u.confirmedAt === null ? u.leaseExpiresAt : null,
+      code: u.code,
+    }));
+}
+
+function toPublic(account: Account, usages: Usage[] = listUsages(account.id)) {
   return {
+    usages: usageView(usages, Date.now()),
     id: account.id,
     email: account.email,
     clientId: account.clientId,
@@ -45,7 +72,9 @@ function toPublic(account: Account) {
 }
 
 router.get("/", (_req, res) => {
-  res.json(listAccounts().map(toPublic));
+  // One query for every account's usage rows, rather than one per row.
+  const usages = listUsagesByAccount();
+  res.json(listAccounts().map((account) => toPublic(account, usages[account.id] ?? [])));
 });
 
 router.post("/", (req, res) => {
@@ -152,23 +181,67 @@ router.patch("/:id", (req, res) => {
 /**
  * Records that the address was copied out of the panel, starting the usage window.
  *
- * Under the "copy" usage mode that copy is itself the whole answer, so the used date is
- * stamped here and nothing waits on mail arriving.
+ * With a `type`, the copy is scoped to it: only that type is claimed, and every other one
+ * this address might serve is left alone. Without a type the account-wide dates move, which
+ * is the behaviour for panels not using the pool at all.
+ *
+ * Under the "copy" usage mode the copy is itself the whole answer, so the used mark is made
+ * here and nothing waits on mail arriving.
  */
 router.post("/:id/copied", (req, res) => {
   const id = Number(req.params.id);
+  const type = typeof req.body?.type === "string" ? req.body.type.trim() : "";
+  const settings = getPanelSettings();
+
+  if (type) {
+    const account = getAccount(id);
+    if (!account) {
+      res.status(404).json({ error: "Account not found" });
+      return;
+    }
+    if (settings.usageMode === "copy") confirmUsage(id, type, null);
+    else leaseSpecific(id, type, settings.leaseMinutes * 60_000);
+
+    res.json(toPublic(account));
+    return;
+  }
+
   const account = markCopied(id);
   if (!account) {
     res.status(404).json({ error: "Account not found" });
     return;
   }
 
-  if (getPanelSettings().usageMode === "copy" && account.lastCopiedAt !== null) {
+  if (settings.usageMode === "copy" && account.lastCopiedAt !== null) {
     recordUsage(id, account.lastCopiedAt);
     // Non-null: the row was just updated, so it exists.
     res.json(toPublic(getAccount(id)!));
     return;
   }
+  res.json(toPublic(account));
+});
+
+/**
+ * Marks or unmarks an address as used for a type by hand, for a signup done outside the
+ * panel or a mark made in error.
+ */
+router.post("/:id/usage", (req, res) => {
+  const id = Number(req.params.id);
+  const account = getAccount(id);
+  if (!account) {
+    res.status(404).json({ error: "Account not found" });
+    return;
+  }
+
+  const type = typeof req.body?.type === "string" ? req.body.type.trim() : "";
+  if (!type) {
+    res.status(400).json({ error: "type is required" });
+    return;
+  }
+
+  if (req.body?.used === false) clearUsage(id, type);
+  else confirmUsage(id, type, null);
+
   res.json(toPublic(account));
 });
 
@@ -191,13 +264,36 @@ router.get("/:id/latest-mail", async (req, res) => {
   }
 
   try {
+    const type = typeof req.query.type === "string" ? req.query.type.trim() : "";
+    // With a type, its sender and subject filters narrow the search and its own pattern
+    // reads the code, so the column shows that service's code rather than whatever landed
+    // most recently. A few messages are fetched rather than one, since the mail being
+    // waited on is not always on top.
     const result = await readFolders(
       { email: account.email, clientId: account.clientId, refreshToken: account.refreshToken },
       ["INBOX", "Junk"],
-      1,
+      type ? 5 : 1,
     );
     if (result.rotatedRefreshToken) recordRefresh(id, result.rotatedRefreshToken, null);
     noteUsage(account.email, result.messages);
+
+    if (type) {
+      const usage = getUsage(id, type);
+      const rules = rulesFor(type, { since: usage?.leasedAt });
+      const hit = findForType(result.messages, rules);
+
+      // Mail matching this type's rules, after the address was claimed for it, is the proof
+      // the address was used for that service.
+      if (hit && usage && usage.confirmedAt === null) confirmUsage(id, type, hit.code ?? null);
+
+      res.json({
+        message: hit ? { ...hit.message, code: hit.code } : null,
+        transport: result.transport,
+        // Non-null: read at the top of this handler, and nothing here deletes it.
+        account: toPublic(getAccount(id)!),
+      });
+      return;
+    }
 
     res.json({
       message: pickForPanel(result.messages),

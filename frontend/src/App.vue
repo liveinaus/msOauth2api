@@ -23,6 +23,9 @@
       <router-link class="nav-link" to="/" @click="sidebarOpen = false">
         <i class="fa-solid fa-users"></i>{{ t("nav.accounts") }}
       </router-link>
+      <router-link class="nav-link" to="/types" @click="sidebarOpen = false">
+        <i class="fa-solid fa-tags"></i>{{ t("nav.types") }}
+      </router-link>
       <router-link class="nav-link" to="/settings" @click="sidebarOpen = false">
         <i class="fa-solid fa-gear"></i>{{ t("nav.settings") }}
       </router-link>

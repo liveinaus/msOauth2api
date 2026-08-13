@@ -38,6 +38,35 @@ function stripHtml(html: string): string {
     .replace(/\s+/g, " ");
 }
 
+/** Bounds what a caller-supplied pattern is run against, since a regex can backtrack badly. */
+const PATTERN_INPUT_MAX = 20_000;
+
+/**
+ * Pulls a code out with a type's own expression.
+ *
+ * Capture group 1 wins when the pattern has one, so `code:\s*(\d{6})` returns just the
+ * digits; without a group the whole match is the code. Subject, text and stripped HTML are
+ * tried in that order, because a subject line carrying the code is the least ambiguous
+ * place it can appear.
+ */
+export function extractWithPattern(
+  pattern: RegExp,
+  text: string,
+  html: string,
+  subject = "",
+): string | undefined {
+  const bodies = [subject, text, stripHtml(html)];
+
+  for (const body of bodies) {
+    if (!body) continue;
+    const match = pattern.exec(body.slice(0, PATTERN_INPUT_MAX));
+    if (!match) continue;
+    const value = (match[1] ?? match[0]).trim();
+    if (value) return value;
+  }
+  return undefined;
+}
+
 /** A token has to mix letters and digits; prose and pure numbers are handled elsewhere. */
 function isTokenLike(value: string): boolean {
   return /[A-Za-z]/.test(value) && /\d/.test(value);

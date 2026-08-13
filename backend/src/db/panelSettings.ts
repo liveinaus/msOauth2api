@@ -11,6 +11,8 @@ export type PanelSettings = {
   /** How long the panel keeps polling a mailbox after its address is copied. */
   pollDurationMinutes: number;
   pollIntervalSeconds: number;
+  /** How long an address handed to an integration stays claimed without a code arriving. */
+  leaseMinutes: number;
   /** "copy" marks an address used the moment it is copied; "mail" waits for mail after it. */
   usageMode: UsageMode;
   showClientId: boolean;
@@ -22,6 +24,7 @@ export type UsageMode = "copy" | "mail";
 export const DEFAULT_PANEL_SETTINGS: PanelSettings = {
   pollDurationMinutes: 5,
   pollIntervalSeconds: 20,
+  leaseMinutes: 15,
   usageMode: "mail",
   showClientId: false,
   showRefreshToken: false,
@@ -30,6 +33,7 @@ export const DEFAULT_PANEL_SETTINGS: PanelSettings = {
 const KEYS = {
   pollDurationMinutes: "panel.poll_duration_minutes",
   pollIntervalSeconds: "panel.poll_interval_seconds",
+  leaseMinutes: "panel.lease_minutes",
   usageMode: "panel.usage_mode",
   showClientId: "panel.show_client_id",
   showRefreshToken: "panel.show_refresh_token",
@@ -39,6 +43,7 @@ const KEYS = {
 export const LIMITS = {
   pollDurationMinutes: { min: 1, max: 60 },
   pollIntervalSeconds: { min: 5, max: 600 },
+  leaseMinutes: { min: 1, max: 1440 },
 } as const;
 
 function clamp(value: number, { min, max }: { min: number; max: number }): number {
@@ -68,6 +73,11 @@ export function getPanelSettings(): PanelSettings {
       DEFAULT_PANEL_SETTINGS.pollIntervalSeconds,
       LIMITS.pollIntervalSeconds,
     ),
+    leaseMinutes: readNumber(
+      KEYS.leaseMinutes,
+      DEFAULT_PANEL_SETTINGS.leaseMinutes,
+      LIMITS.leaseMinutes,
+    ),
     usageMode: mode === "copy" || mode === "mail" ? mode : DEFAULT_PANEL_SETTINGS.usageMode,
     showClientId: readBoolean(KEYS.showClientId, DEFAULT_PANEL_SETTINGS.showClientId),
     showRefreshToken: readBoolean(KEYS.showRefreshToken, DEFAULT_PANEL_SETTINGS.showRefreshToken),
@@ -87,6 +97,9 @@ export function savePanelSettings(patch: Partial<PanelSettings>): PanelSettings 
       KEYS.pollIntervalSeconds,
       String(clamp(patch.pollIntervalSeconds, LIMITS.pollIntervalSeconds)),
     );
+  }
+  if (typeof patch.leaseMinutes === "number" && Number.isFinite(patch.leaseMinutes)) {
+    setSetting(KEYS.leaseMinutes, String(clamp(patch.leaseMinutes, LIMITS.leaseMinutes)));
   }
   if (patch.usageMode === "copy" || patch.usageMode === "mail") {
     setSetting(KEYS.usageMode, patch.usageMode);

@@ -23,6 +23,8 @@ type PollState = {
   until: number;
   /** Copy time, in server clock terms: mail at or after this is what the poll is waiting for. */
   since: number;
+  /** Set when the copy was scoped to an integration type, so its rules do the matching. */
+  type?: string;
   failures: number;
 };
 
@@ -54,9 +56,9 @@ export function isPolling(id: number): boolean {
   return id in polls.value;
 }
 
-export async function refreshLatest(id: number): Promise<AccountView | null> {
+export async function refreshLatest(id: number, type?: string): Promise<AccountView | null> {
   try {
-    const result = await fetchLatestMail(id);
+    const result = await fetchLatestMail(id, type);
     entries.value = {
       ...entries.value,
       [id]: { message: result.message, fetchedAt: Date.now(), error: "" },
@@ -75,12 +77,17 @@ export async function refreshLatest(id: number): Promise<AccountView | null> {
 
 export function startPolling(
   id: number,
-  options: { durationMs: number; intervalMs: number; since: number },
+  options: { durationMs: number; intervalMs: number; since: number; type?: string },
 ): void {
   stopPolling(id);
   polls.value = {
     ...polls.value,
-    [id]: { until: Date.now() + options.durationMs, since: options.since, failures: 0 },
+    [id]: {
+      until: Date.now() + options.durationMs,
+      since: options.since,
+      type: options.type,
+      failures: 0,
+    },
   };
   startTick();
   void pollOnce(id, options.intervalMs);
@@ -100,9 +107,10 @@ export function stopPolling(id: number): void {
 }
 
 async function pollOnce(id: number, intervalMs: number): Promise<void> {
-  if (!polls.value[id]) return;
+  const pending = polls.value[id];
+  if (!pending) return;
 
-  const account = await refreshLatest(id);
+  const account = await refreshLatest(id, pending.type);
   const state = polls.value[id];
   // A stop while the request was in flight.
   if (!state) return;

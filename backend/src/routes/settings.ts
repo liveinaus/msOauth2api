@@ -19,6 +19,7 @@ router.put("/", (req, res) => {
         typeof body.pollDurationMinutes === "number" ? body.pollDurationMinutes : undefined,
       pollIntervalSeconds:
         typeof body.pollIntervalSeconds === "number" ? body.pollIntervalSeconds : undefined,
+      leaseMinutes: typeof body.leaseMinutes === "number" ? body.leaseMinutes : undefined,
       usageMode:
         body.usageMode === "copy" || body.usageMode === "mail" ? body.usageMode : undefined,
       showClientId: typeof body.showClientId === "boolean" ? body.showClientId : undefined,

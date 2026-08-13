@@ -465,6 +465,32 @@ body {
   margin-bottom: 0;
 }
 
+/* Catches the click that dismisses the type menu, without dimming the page behind it. */
+.popover-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 150;
+}
+
+.type-menu {
+  position: fixed;
+  width: 220px;
+  max-height: 300px;
+  overflow: auto;
+  background: #fff;
+  border: 1px solid #e3e6eb;
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
+  padding: 10px 12px;
+}
+
+.type-menu-head {
+  font-size: 12px;
+  font-weight: 600;
+  color: #4b5563;
+  margin-bottom: 8px;
+}
+
 /* Teleported out of the table, so it needs its own stacking context and shadow. */
 .code-popover {
   position: fixed;
@@ -526,6 +552,13 @@ body {
 .badge-err {
   background: #fdeaec;
   color: #b3283a;
+}
+
+/* A confirmed integration type. A live lease uses badge-off, being provisional. */
+.badge-type {
+  background: #eef4ff;
+  color: #2d5fd0;
+  border: 1px solid #cfe0ff;
 }
 
 .mono {

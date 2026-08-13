@@ -53,6 +53,12 @@
       </div>
 
       <div class="form-group">
+        <label class="form-label">{{ t("settings.leaseMinutes") }}</label>
+        <input v-model.number="panel.leaseMinutes" class="form-input" type="number" min="1" max="1440" />
+        <p class="hint">{{ t("settings.leaseMinutesHint") }}</p>
+      </div>
+
+      <div class="form-group">
         <label class="form-label">{{ t("settings.usageMode") }}</label>
         <select v-model="panel.usageMode" class="form-input">
           <option value="mail">{{ t("settings.usageModeMail") }}</option>
