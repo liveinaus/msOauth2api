@@ -5,6 +5,7 @@ import { requireApiAccess, requireSendAccess } from "../middleware/auth";
 import { exchangeRefreshToken, getMailAccessToken, OAuthError } from "../services/oauth";
 import { purgeMail, readMail } from "../services/mail";
 import { sendMail } from "../services/smtp";
+import { noteUsage } from "../services/usage";
 import type { Mailbox, MailMessage } from "../types";
 import { ParamError, parseLimit, parseMailbox, readParams, resolveCredentials } from "./params";
 
@@ -96,6 +97,7 @@ async function handleMailNew(req: Request, res: Response): Promise<void> {
     const credentials = resolveCredentials(params);
     const result = await readMail(credentials, mailbox, 1);
     persistRotation(credentials.email, result.rotatedRefreshToken);
+    if (mailbox === "INBOX") noteUsage(credentials.email, result.messages);
 
     const latest = result.messages[0];
 
@@ -143,6 +145,7 @@ async function handleMailAll(req: Request, res: Response): Promise<void> {
 
     const result = await readMail(credentials, mailbox, limit);
     persistRotation(credentials.email, result.rotatedRefreshToken);
+    if (mailbox === "INBOX") noteUsage(credentials.email, result.messages);
 
     res.status(200).json(result.messages);
   } catch (error) {

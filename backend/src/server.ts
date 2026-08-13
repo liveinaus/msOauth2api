@@ -15,6 +15,7 @@ import apiKeysRouter from "./routes/apikeys";
 import authRouter from "./routes/auth";
 import healthRouter from "./routes/health";
 import mailRouter from "./routes/mail";
+import settingsRouter from "./routes/settings";
 
 // Fail fast on a missing or placeholder secret, before anything is served.
 getJwtSecret();
@@ -110,6 +111,7 @@ app.use("/api", healthRouter);
 app.use("/api/auth", authRouter);
 app.use("/api/accounts", accountsRouter);
 app.use("/api/api-keys", apiKeysRouter);
+app.use("/api/settings", settingsRouter);
 app.use("/api", mailRouter);
 app.use("/api", aiRouter);
 

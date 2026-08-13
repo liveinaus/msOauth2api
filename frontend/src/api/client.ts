@@ -20,7 +20,11 @@ api.interceptors.request.use((config) => {
 function isCredentialCheck(url: string | undefined): boolean {
   if (!url) return false;
   const path = url.split("?")[0];
-  return path.endsWith("/auth/login") || path.endsWith("/auth/credentials");
+  return (
+    path.endsWith("/auth/login") ||
+    path.endsWith("/auth/captcha") ||
+    path.endsWith("/auth/credentials")
+  );
 }
 
 api.interceptors.response.use(
@@ -58,6 +62,8 @@ export type AccountView = {
   disabled: boolean;
   lastRefreshAt: number | null;
   lastRefreshError: string | null;
+  lastCopiedAt: number | null;
+  lastUsedAt: number | null;
   createdAt: number;
   updatedAt: number;
 };
@@ -88,12 +94,43 @@ export type HealthView = {
 
 export type Mailbox = "INBOX" | "Junk";
 
+/** "copy" marks an address used as soon as it is copied; "mail" waits for mail after it. */
+export type UsageMode = "copy" | "mail";
+
+export type PanelSettings = {
+  pollDurationMinutes: number;
+  pollIntervalSeconds: number;
+  usageMode: UsageMode;
+  showClientId: boolean;
+  showRefreshToken: boolean;
+};
+
+export const DEFAULT_PANEL_SETTINGS: PanelSettings = {
+  pollDurationMinutes: 5,
+  pollIntervalSeconds: 20,
+  usageMode: "mail",
+  showClientId: false,
+  showRefreshToken: false,
+};
+
 // ── Calls ─────────────────────────────────────────────────────────────────────
 
-export async function login(username: string, password: string) {
+export type CaptchaChallenge = { svg: string; captchaToken: string };
+
+export async function fetchCaptcha() {
+  const { data } = await api.get<CaptchaChallenge>("/auth/captcha");
+  return data;
+}
+
+export async function login(
+  username: string,
+  password: string,
+  captchaToken: string,
+  captchaAnswer: string,
+) {
   const { data } = await api.post<{ token: string; requirePasswordChange: boolean }>(
     "/auth/login",
-    { username, password },
+    { username, password, captchaToken, captchaAnswer },
   );
   localStorage.setItem("token", data.token);
   requirePasswordChange.value = data.requirePasswordChange;
@@ -148,6 +185,23 @@ export async function deleteAccounts(ids: number[]) {
   return data;
 }
 
+/** Stamps the copy time, which is what the "used" column measures arrivals against. */
+export async function markAccountCopied(id: number) {
+  const { data } = await api.post<AccountView>(`/accounts/${id}/copied`);
+  return data;
+}
+
+export type LatestMailView = {
+  message: MailMessage | null;
+  transport: "graph" | "imap";
+  account: AccountView;
+};
+
+export async function fetchLatestMail(id: number) {
+  const { data } = await api.get<LatestMailView>(`/accounts/${id}/latest-mail`);
+  return data;
+}
+
 export async function refreshAccountTokens(ids?: number[]) {
   const { data } = await api.post<{
     total: number;
@@ -189,6 +243,16 @@ export async function createApiKeyRequest(name: string) {
 
 export async function deleteApiKeyRequest(id: number) {
   await api.delete(`/api-keys/${id}`);
+}
+
+export async function fetchPanelSettings() {
+  const { data } = await api.get<PanelSettings>("/settings");
+  return data;
+}
+
+export async function savePanelSettings(patch: Partial<PanelSettings>) {
+  const { data } = await api.put<PanelSettings>("/settings", patch);
+  return data;
 }
 
 export async function updateCredentials(input: {

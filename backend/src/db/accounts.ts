@@ -12,6 +12,8 @@ type AccountRow = {
   disabled: number;
   last_refresh_at: number | null;
   last_refresh_error: string | null;
+  last_copied_at: number | null;
+  last_used_at: number | null;
   created_at: number;
   updated_at: number;
 };
@@ -35,6 +37,8 @@ function toAccount(row: AccountRow): Account {
     disabled: row.disabled === 1,
     lastRefreshAt: row.last_refresh_at,
     lastRefreshError: row.last_refresh_error,
+    lastCopiedAt: row.last_copied_at,
+    lastUsedAt: row.last_used_at,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -134,6 +138,23 @@ export function recordRefresh(id: number, refreshToken: string | null, error: st
     error,
     now: Date.now(),
   });
+}
+
+/**
+ * Stamps the moment the address was copied out of the panel.
+ *
+ * Copying is the point an address gets handed to some other service, so it is the start of
+ * the window that decides whether the account was actually used -- see recordUsage.
+ * updated_at is deliberately left alone: nothing about the account itself changed.
+ */
+export function markCopied(id: number): Account | undefined {
+  db.prepare("UPDATE accounts SET last_copied_at = ? WHERE id = ?").run(Date.now(), id);
+  return getAccount(id);
+}
+
+/** Records the arrival of the newest message that landed after the address was copied. */
+export function recordUsage(id: number, usedAt: number): void {
+  db.prepare("UPDATE accounts SET last_used_at = ? WHERE id = ?").run(usedAt, id);
 }
 
 export function deleteAccounts(ids: number[]): number {

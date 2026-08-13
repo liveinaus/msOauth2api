@@ -39,6 +39,8 @@ db.exec(`
     disabled           INTEGER NOT NULL DEFAULT 0,
     last_refresh_at    INTEGER,
     last_refresh_error TEXT,
+    last_copied_at     INTEGER,
+    last_used_at       INTEGER,
     created_at         INTEGER NOT NULL,
     updated_at         INTEGER NOT NULL
   );
@@ -55,6 +57,19 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_accounts_email ON accounts(email);
   CREATE INDEX IF NOT EXISTS idx_api_keys_prefix ON api_keys(key_prefix);
 `);
+
+/**
+ * SQLite has no ADD COLUMN IF NOT EXISTS, and the CREATE TABLE above only applies to a
+ * fresh file, so columns added after a release need this to reach existing installs.
+ */
+function addColumn(table: string, column: string, definition: string): void {
+  const columns = db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[];
+  if (columns.some((c) => c.name === column)) return;
+  db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+}
+
+addColumn("accounts", "last_copied_at", "INTEGER");
+addColumn("accounts", "last_used_at", "INTEGER");
 
 export function getSetting(key: string): string | undefined {
   const row = db.prepare("SELECT value FROM settings WHERE key = ?").get(key) as

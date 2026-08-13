@@ -23,6 +23,60 @@
       <div v-else class="hint">{{ t("common.loading") }}</div>
     </div>
 
+    <!-- Panel behaviour -->
+    <div class="card">
+      <div class="card-title">{{ t("settings.panel") }}</div>
+
+      <div class="form-row">
+        <div class="form-group">
+          <label class="form-label">{{ t("settings.pollDuration") }}</label>
+          <input
+            v-model.number="panel.pollDurationMinutes"
+            class="form-input"
+            type="number"
+            min="1"
+            max="60"
+          />
+          <p class="hint">{{ t("settings.pollDurationHint") }}</p>
+        </div>
+        <div class="form-group">
+          <label class="form-label">{{ t("settings.pollInterval") }}</label>
+          <input
+            v-model.number="panel.pollIntervalSeconds"
+            class="form-input"
+            type="number"
+            min="5"
+            max="600"
+          />
+          <p class="hint">{{ t("settings.pollIntervalHint") }}</p>
+        </div>
+      </div>
+
+      <div class="form-group">
+        <label class="form-label">{{ t("settings.usageMode") }}</label>
+        <select v-model="panel.usageMode" class="form-input">
+          <option value="mail">{{ t("settings.usageModeMail") }}</option>
+          <option value="copy">{{ t("settings.usageModeCopy") }}</option>
+        </select>
+        <p class="hint">{{ t("settings.usageModeHint") }}</p>
+      </div>
+
+      <div class="form-group">
+        <label class="check-row">
+          <input v-model="panel.showClientId" type="checkbox" />
+          {{ t("settings.showClientId") }}
+        </label>
+        <label class="check-row">
+          <input v-model="panel.showRefreshToken" type="checkbox" />
+          {{ t("settings.showRefreshToken") }}
+        </label>
+      </div>
+
+      <button class="btn btn-primary" :disabled="savingPanel" @click="savePanel">
+        {{ savingPanel ? t("common.saving") : t("common.save") }}
+      </button>
+    </div>
+
     <!-- Credentials -->
     <div class="card">
       <div class="card-title">{{ t("settings.credentials") }}</div>
@@ -109,9 +163,13 @@ import {
   errorMessage,
   fetchApiKeys,
   fetchHealth,
+  fetchPanelSettings,
+  savePanelSettings,
   updateCredentials,
+  DEFAULT_PANEL_SETTINGS,
   type ApiKeyView,
   type HealthView,
+  type PanelSettings,
 } from "../api/client";
 import { t } from "../i18n";
 
@@ -124,6 +182,9 @@ const currentPassword = ref("");
 const newUsername = ref("");
 const newPassword = ref("");
 const savingCredentials = ref(false);
+
+const panel = ref<PanelSettings>({ ...DEFAULT_PANEL_SETTINGS });
+const savingPanel = ref(false);
 
 const newKeyName = ref("");
 const creatingKey = ref(false);
@@ -139,12 +200,27 @@ async function load(): Promise<void> {
   try {
     health.value = await fetchHealth();
     apiKeys.value = await fetchApiKeys();
+    panel.value = await fetchPanelSettings();
   } catch (err) {
     error.value = errorMessage(err, "Could not load settings");
   }
 }
 
 onMounted(load);
+
+/** The server clamps the timings, so the reply is what actually took effect. */
+async function savePanel(): Promise<void> {
+  error.value = "";
+  savingPanel.value = true;
+  try {
+    panel.value = await savePanelSettings(panel.value);
+    flash(t("settings.panelSaved"));
+  } catch (err) {
+    error.value = errorMessage(err, "Could not save panel settings");
+  } finally {
+    savingPanel.value = false;
+  }
+}
 
 async function saveCredentials(): Promise<void> {
   error.value = "";

@@ -16,6 +16,8 @@ not granted `Mail.Read` -- Graph is faster and less rate-limited.
 - Refresh tokens, individually or in batches
 - Optional AI summarisation via any OpenAI-compatible endpoint
 - Web panel: account list, import/export, mailbox browser, API key management
+- Copy an address from the panel and it watches that mailbox for the code that follows
+- Usage tracking, on copy alone or on mail arriving after the copy (Settings decides which)
 
 ## Quick start
 
@@ -57,8 +59,16 @@ Every variable is documented in [env.example](env.example). The essentials:
 
 ## Authentication
 
-The panel uses an admin login (argon2-hashed, JWT sessions). The mail endpoints are meant
-for scripts and take an **API key**, created under Settings. Send it either way:
+The panel uses an admin login: argon2-hashed credentials, JWT sessions, an image **captcha**
+and per-IP rate limiting on every password check.
+
+The captcha answer never leaves the server. The browser is given an opaque id and the answer
+stays in the process, because signing it into a token for the client to quote back would put
+it one `atob` away (a JWT payload is base64, not ciphertext). Each challenge is also burnt on
+a single attempt, win or lose, so one solved captcha cannot cover a run of password guesses.
+
+The mail endpoints are meant for scripts, so they carry no captcha and take an **API key**
+created under Settings. Send it either way:
 
 ```bash
 # Preferred: a header, so the secret stays out of logs
@@ -78,16 +88,22 @@ so existing automation needs no changes.
 
 All endpoints accept GET or POST, and read parameters from the query string or the body.
 
-| Endpoint                      | Purpose                                                     |
-| ----------------------------- | ----------------------------------------------------------- |
-| `GET/POST /api/mail-new`      | Latest message in a folder                                  |
-| `GET/POST /api/mail-all`      | Messages in a folder, newest first                          |
-| `GET/POST /api/refresh-token` | Exchange a refresh token for its replacement                |
-| `GET/POST /api/process-inbox` | Empty the inbox                                             |
-| `GET/POST /api/process-junk`  | Empty the junk folder                                       |
-| `GET/POST /api/send-mail`     | Send a message over SMTP                                    |
-| `POST /api/ai`                | Streaming OpenAI-compatible proxy (SSE)                     |
-| `GET /api/health`             | Unauthenticated liveness, used by the container healthcheck |
+| Endpoint                      | Purpose                                                       |
+| ----------------------------- | ------------------------------------------------------------- |
+| `GET/POST /api/mail-new`      | Latest message in a folder                                    |
+| `GET/POST /api/mail-all`      | Messages in a folder, newest first                            |
+| `GET/POST /api/refresh-token` | Exchange a refresh token for its replacement                  |
+| `GET/POST /api/process-inbox` | Empty the inbox                                               |
+| `GET/POST /api/process-junk`  | Empty the junk folder                                         |
+| `GET/POST /api/send-mail`     | Send a message over SMTP                                      |
+| `POST /api/ai`                | Streaming OpenAI-compatible proxy (SSE)                       |
+| `GET /api/auth/captcha`       | Issues a login captcha: `{ svg, captchaToken }`               |
+| `POST /api/auth/login`        | Needs `username`, `password`, `captchaToken`, `captchaAnswer` |
+| `GET /api/health`             | Unauthenticated liveness, used by the container healthcheck   |
+
+Rate limits, all per IP over 15 minutes: 10 login attempts, 10 credential changes, 60 captcha
+requests. Set `TRUST_PROXY` correctly behind a reverse proxy or every visitor shares one
+bucket.
 
 ### Parameters
 
@@ -156,6 +172,8 @@ Behaviour that changed deliberately, beyond the port itself:
 - **The SMTP `ciphers: 'SSLv3'` pin is gone**; modern OpenSSL refuses that suite outright.
 - **Verification-code extraction is implemented.** Upstream's README advertised it but the
   code was not there.
+- **The admin login has a captcha and rate limiting.** Upstream had no panel login at all:
+  the shared `PASSWORD` was typed into the page and kept in `localStorage`.
 
 ## Development
 

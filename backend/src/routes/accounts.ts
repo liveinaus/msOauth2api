@@ -3,12 +3,17 @@ import {
   deleteAccounts,
   getAccount,
   listAccounts,
+  markCopied,
   recordRefresh,
+  recordUsage,
   updateAccount,
   upsertAccount,
 } from "../db/accounts";
+import { getPanelSettings } from "../db/panelSettings";
 import { requireAuth } from "../middleware/auth";
+import { readMail } from "../services/mail";
 import { exchangeRefreshToken, OAuthError } from "../services/oauth";
+import { noteUsage } from "../services/usage";
 import type { Account } from "../types";
 
 const router = Router();
@@ -32,6 +37,8 @@ function toPublic(account: Account) {
     disabled: account.disabled,
     lastRefreshAt: account.lastRefreshAt,
     lastRefreshError: account.lastRefreshError,
+    lastCopiedAt: account.lastCopiedAt,
+    lastUsedAt: account.lastUsedAt,
     createdAt: account.createdAt,
     updatedAt: account.updatedAt,
   };
@@ -140,6 +147,71 @@ router.patch("/:id", (req, res) => {
     return;
   }
   res.json(toPublic(updated));
+});
+
+/**
+ * Records that the address was copied out of the panel, starting the usage window.
+ *
+ * Under the "copy" usage mode that copy is itself the whole answer, so the used date is
+ * stamped here and nothing waits on mail arriving.
+ */
+router.post("/:id/copied", (req, res) => {
+  const id = Number(req.params.id);
+  const account = markCopied(id);
+  if (!account) {
+    res.status(404).json({ error: "Account not found" });
+    return;
+  }
+
+  if (getPanelSettings().usageMode === "copy" && account.lastCopiedAt !== null) {
+    recordUsage(id, account.lastCopiedAt);
+    // Non-null: the row was just updated, so it exists.
+    res.json(toPublic(getAccount(id)!));
+    return;
+  }
+  res.json(toPublic(account));
+});
+
+/**
+ * The newest inbox message, for the panel's quick look.
+ *
+ * Separate from /mail-new so the panel does not have to hold or pass credentials, and so
+ * the reply carries the account back with its usage date already updated -- the caller
+ * would otherwise have to reload the whole list to see the column change.
+ */
+router.get("/:id/latest-mail", async (req, res) => {
+  const id = Number(req.params.id);
+  const account = getAccount(id);
+  if (!account) {
+    res.status(404).json({ error: "Account not found" });
+    return;
+  }
+
+  try {
+    const result = await readMail(
+      { email: account.email, clientId: account.clientId, refreshToken: account.refreshToken },
+      "INBOX",
+      1,
+    );
+    if (result.rotatedRefreshToken) recordRefresh(id, result.rotatedRefreshToken, null);
+    noteUsage(account.email, result.messages);
+
+    res.json({
+      message: result.messages[0] ?? null,
+      transport: result.transport,
+      // Non-null: the row was read at the top of this handler and nothing deletes it here.
+      account: toPublic(getAccount(id)!),
+    });
+  } catch (error) {
+    if (error instanceof OAuthError) {
+      recordRefresh(id, null, error.details.slice(0, 500));
+      res.status(error.status).json({ error: "Refresh token failed", details: error.details });
+      return;
+    }
+    const message = error instanceof Error ? error.message : String(error);
+    console.error("[accounts:latest-mail]", error);
+    res.status(500).json({ error: message });
+  }
 });
 
 router.post("/delete", (req, res) => {

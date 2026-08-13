@@ -11,6 +11,10 @@ export type Account = {
   disabled: boolean;
   lastRefreshAt: number | null;
   lastRefreshError: string | null;
+  /** When the address was last copied out of the panel, i.e. handed to some other service. */
+  lastCopiedAt: number | null;
+  /** Arrival time of the newest message that landed after that copy. */
+  lastUsedAt: number | null;
   createdAt: number;
   updatedAt: number;
 };

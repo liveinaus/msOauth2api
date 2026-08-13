@@ -1,5 +1,6 @@
 import { Router } from "express";
 import rateLimit from "express-rate-limit";
+import svgCaptcha from "svg-captcha";
 import {
   adminUsername,
   setAdminPassword,
@@ -7,6 +8,7 @@ import {
   usingDefaultPassword,
   verifyAdmin,
 } from "../auth/credentials";
+import { consumeCaptcha, issueCaptcha } from "../auth/captchaStore";
 import { requireAuth, signSession } from "../middleware/auth";
 
 const router = Router();
@@ -22,10 +24,52 @@ const loginLimiter = rateLimit({
   message: { error: "Too many login attempts. Try again in 15 minutes." },
 });
 
+// Issuing challenges is cheap but not free, and an unbounded stream of them is the one way
+// to make the store churn. Generous enough that someone reloading a hard-to-read captcha
+// never meets it.
+const captchaLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 60,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: "Too many captcha requests. Try again later." },
+});
+
+// Changing credentials checks the current password, so it is password guessing by another
+// name and belongs behind the same kind of brake as the login form.
+const credentialLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: "Too many attempts. Try again in 15 minutes." },
+});
+
+router.get("/captcha", captchaLimiter, (_req, res) => {
+  // Characters that read ambiguously in a distorted font are excluded, because a captcha
+  // nobody can solve is only a brake on the operator.
+  const captcha = svgCaptcha.create({ noise: 2, color: true, size: 5, ignoreChars: "0oO1lI" });
+  // The answer stays in this process (see auth/captchaStore); what goes out is an opaque id.
+  res.json({ svg: captcha.data, captchaToken: issueCaptcha(captcha.text) });
+});
+
 router.post("/login", loginLimiter, async (req, res) => {
-  const { username, password } = req.body ?? {};
+  const { username, password, captchaToken, captchaAnswer } = req.body ?? {};
   if (typeof username !== "string" || typeof password !== "string") {
     res.status(400).json({ error: "username and password are required" });
+    return;
+  }
+
+  if (typeof captchaToken !== "string" || typeof captchaAnswer !== "string") {
+    res.status(400).json({ error: "Captcha is required" });
+    return;
+  }
+
+  // Checked before the password, so a wrong captcha costs no argon2 verify and cannot be
+  // used to time one. Consuming here means a solved challenge cannot be replayed across a
+  // run of guesses.
+  if (!consumeCaptcha(captchaToken, captchaAnswer)) {
+    res.status(400).json({ error: "Incorrect or expired captcha, please refresh" });
     return;
   }
 
@@ -45,7 +89,7 @@ router.get("/me", requireAuth, (_req, res) => {
   res.json({ username: adminUsername(), requirePasswordChange: usingDefaultPassword() });
 });
 
-router.post("/credentials", requireAuth, async (req, res) => {
+router.post("/credentials", requireAuth, credentialLimiter, async (req, res) => {
   const { currentPassword, newPassword, newUsername } = req.body ?? {};
 
   if (

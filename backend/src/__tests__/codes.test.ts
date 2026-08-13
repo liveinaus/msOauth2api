@@ -38,4 +38,39 @@ describe("extractCode", () => {
   it("uses the subject line as context", () => {
     expect(extractCode("558844", "", "Your login code")).toBe("558844");
   });
+
+  it("reads a token-style code", () => {
+    expect(extractCode("Your verification code is c5c3fbee7ef822e225cf9c94", "")).toBe(
+      "c5c3fbee7ef822e225cf9c94",
+    );
+  });
+
+  it("keeps a UUID whole", () => {
+    const code = "550e8400-e29b-41d4-a716-446655440000";
+    expect(extractCode(`Security code: ${code}`, "")).toBe(code);
+  });
+
+  it("ignores a token that is part of a link", () => {
+    const body = "Verify your account: https://example.com/verify/c5c3fbee7ef822e225cf9c94";
+    expect(extractCode(body, "")).toBeUndefined();
+  });
+
+  it("ignores a token in a query string or an address", () => {
+    expect(extractCode("verification: ?t=c5c3fbee7ef822e225cf9c94", "")).toBeUndefined();
+    expect(extractCode("code sent to a1b2c3d4e5f6@example.com", "")).toBeUndefined();
+  });
+
+  it("does not treat plain words as tokens", () => {
+    expect(extractCode("Your verification is pending confirmation shortly", "")).toBeUndefined();
+  });
+
+  it("prefers a 6-digit run over a token in the same mail", () => {
+    const body = "Your code is 483920. Request id a1b2c3d4e5f6a7b8 for this verification.";
+    expect(extractCode(body, "")).toBe("483920");
+  });
+
+  it("prefers a token over a stray 8-digit run", () => {
+    const body = "Order 20260813 shipped. Your verification code is c5c3fbee7ef822e225cf9c94";
+    expect(extractCode(body, "")).toBe("c5c3fbee7ef822e225cf9c94");
+  });
 });
