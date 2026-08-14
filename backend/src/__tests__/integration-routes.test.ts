@@ -303,6 +303,64 @@ describe("per-type marking from the panel", () => {
   });
 });
 
+describe("type matching is case-insensitive", () => {
+  it("treats every spelling as one type, and answers in the normalised one", async () => {
+    upsertAccount({ email: "case@x.com", password: null, clientId: "c", refreshToken: "t" });
+
+    // Leased with padding and mixed case.
+    const lease = await call("/api/get-available-email?type=%20CaseTest%20");
+    expect(lease.status).toBe(200);
+    expect(lease.body.type).toBe("casetest");
+
+    // Found again under a different spelling.
+    const status = await call(`/api/email-status?email=${lease.body.email}&type=CASETEST`);
+    expect(status.body.usages).toHaveLength(1);
+
+    const pool = await call("/api/pool-status?type=casetest");
+    expect(pool.body).toMatchObject({ type: "casetest", leased: 1 });
+
+    // And released by a third.
+    const released = await call("/api/release-email", {
+      method: "POST",
+      body: JSON.stringify({ email: lease.body.email, type: "CaseTEST" }),
+    });
+    expect(released.body).toMatchObject({ released: true, type: "casetest" });
+  });
+
+  it("reaches a configured type's rules whatever case the caller sends", async () => {
+    folderMessages = [
+      codeMail({
+        send: "noreply@telegram.org",
+        text: "Your login code: 66123",
+        code: undefined,
+      }),
+    ];
+    upsertAccount({ email: "case2@x.com", password: null, clientId: "c", refreshToken: "t" });
+
+    // The stored type is "telegram"; the caller shouts.
+    const { body } = await call("/api/get-code?email=case2@x.com&type=TELEGRAM");
+    expect(body).toMatchObject({ status: "found", code: "66123", type: "telegram" });
+    expect(getUsage(getAccountByEmail("case2@x.com")!.id, "TeLeGrAm")?.confirmedAt).toBeGreaterThan(
+      0,
+    );
+  });
+
+  it("scopes a panel copy to the same type regardless of case", async () => {
+    const account = upsertAccount({
+      email: "case3@x.com",
+      password: null,
+      clientId: "c",
+      refreshToken: "t",
+    });
+
+    await call(`/api/accounts/${account.id}/copied`, {
+      method: "POST",
+      body: JSON.stringify({ type: "  TeleGram " }),
+    });
+    expect(getUsage(account.id, "telegram")?.leasedAt).toBeGreaterThan(0);
+  });
+});
+
 describe("accounts list", () => {
   type Row = { email: string; usages: { type: string; confirmedAt: number | null }[] };
 

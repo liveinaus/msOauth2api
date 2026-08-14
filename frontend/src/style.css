@@ -715,6 +715,21 @@ body {
   color: #8a5b00;
 }
 
+.alert-info {
+  background: #eef4ff;
+  color: #2d5fd0;
+}
+
+/*
+  A row held open against the hide filter. The left edge is the cue, since the row is
+  otherwise identical to its neighbours and the stripe already owns the background.
+*/
+.table tbody tr.row-pinned,
+.table tbody tr.row-pinned:nth-child(even) {
+  background: #f2f7ff;
+  box-shadow: inset 3px 0 0 #4f8cff;
+}
+
 .toast {
   position: fixed;
   bottom: 24px;

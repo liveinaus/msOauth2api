@@ -17,6 +17,7 @@ import {
   leaseSpecific,
   listUsages,
   listUsagesByAccount,
+  normaliseType,
   type Usage,
 } from "../db/usages";
 import { requireAuth } from "../middleware/auth";
@@ -190,7 +191,7 @@ router.patch("/:id", (req, res) => {
  */
 router.post("/:id/copied", (req, res) => {
   const id = Number(req.params.id);
-  const type = typeof req.body?.type === "string" ? req.body.type.trim() : "";
+  const type = typeof req.body?.type === "string" ? normaliseType(req.body.type) : "";
   const settings = getPanelSettings();
 
   if (type) {
@@ -233,7 +234,7 @@ router.post("/:id/usage", (req, res) => {
     return;
   }
 
-  const type = typeof req.body?.type === "string" ? req.body.type.trim() : "";
+  const type = typeof req.body?.type === "string" ? normaliseType(req.body.type) : "";
   if (!type) {
     res.status(400).json({ error: "type is required" });
     return;
@@ -264,7 +265,7 @@ router.get("/:id/latest-mail", async (req, res) => {
   }
 
   try {
-    const type = typeof req.query.type === "string" ? req.query.type.trim() : "";
+    const type = typeof req.query.type === "string" ? normaliseType(req.query.type) : "";
     // With a type, its sender and subject filters narrow the search and its own pattern
     // reads the code, so the column shows that service's code rather than whatever landed
     // most recently. A few messages are fetched rather than one, since the mail being

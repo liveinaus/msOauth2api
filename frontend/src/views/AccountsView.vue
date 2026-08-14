@@ -41,6 +41,15 @@
     <div v-if="notice" class="alert alert-ok">{{ notice }}</div>
     <div v-if="error" class="alert alert-error">{{ error }}</div>
 
+    <!-- Only worth saying while the filter is what would otherwise be hiding these rows. -->
+    <div v-if="hideUsed && pinnedCount()" class="alert alert-info">
+      <i class="fa-solid fa-thumbtack"></i>
+      {{ t("accounts.pinnedNotice", { n: pinnedCount() }) }}
+      <button class="btn btn-sm" style="margin-left: 8px" @click="clearPins">
+        {{ t("accounts.releaseAll") }}
+      </button>
+    </div>
+
     <div class="table-wrap">
       <table class="table">
         <thead>
@@ -61,7 +70,7 @@
           </tr>
         </thead>
         <tbody>
-          <tr v-for="account in pageItems" :key="account.id">
+          <tr v-for="account in pageItems" :key="account.id" :class="{ 'row-pinned': isPinned(account.id) }">
             <td class="checkbox-cell">
               <input type="checkbox" :checked="selected.has(account.id)" @change="toggle(account.id)" />
             </td>
@@ -112,7 +121,7 @@
             <td>
               <div class="cell-row">
                 <span
-                  v-for="usage in account.usages"
+                  v-for="usage in visibleUsages(account)"
                   :key="usage.type"
                   class="badge"
                   :class="usage.confirmedAt ? 'badge-type' : 'badge-off'"
@@ -120,7 +129,7 @@
                 >
                   {{ usage.type }}
                 </span>
-                <span v-if="!account.usages.length" class="muted">—</span>
+                <span v-if="!visibleUsages(account).length" class="muted">—</span>
                 <button
                   v-if="usageTypes.length"
                   class="btn btn-sm"
@@ -191,6 +200,14 @@
                   @click="toggleDisabled(account)"
                 >
                   <i :class="account.disabled ? 'fa-solid fa-play' : 'fa-solid fa-pause'"></i>
+                </button>
+                <button
+                  v-if="isPinned(account.id)"
+                  class="btn btn-sm"
+                  :title="t('accounts.releaseRow')"
+                  @click="release(account.id)"
+                >
+                  <i class="fa-solid fa-thumbtack"></i>
                 </button>
               </div>
             </td>
@@ -406,13 +423,18 @@ import { t } from "../i18n";
 import { copyText } from "../utils/clipboard";
 import { persistentRef } from "../utils/prefs";
 import {
+  clearPins,
   clock,
+  isPinned,
   isPolling,
   latestFor,
   onAccountUpdate,
+  pin,
+  pinnedCount,
   pollDeadline,
   refreshLatest,
   startPolling,
+  unpin,
 } from "../stores/latestMail";
 
 const router = useRouter();
@@ -476,12 +498,24 @@ function usageFor(account: AccountView): AccountUsageView | undefined {
   return activeType.value ? account.usages.find((u) => u.type === activeType.value) : undefined;
 }
 
+/**
+ * With a type selected the column narrows to it. Everything on the page is about that type
+ * at that point, so tags for the others are noise the eye has to filter out.
+ */
+function visibleUsages(account: AccountView): AccountUsageView[] {
+  if (!activeType.value) return account.usages;
+  const usage = usageFor(account);
+  return usage ? [usage] : [];
+}
+
 const filtered = computed(() => {
   const term = search.value.trim().toLowerCase();
   return accounts.value.filter((a) => {
     // With a type selected the filter is about that type alone, so an address used for
     // something else still shows: it is unused for this one, which is what matters.
-    if (hideUsed.value) {
+    // A pinned row is exempt: it is the one being worked on, and hiding it the moment the
+    // copy marked it used is what made this filter awkward to use in the first place.
+    if (hideUsed.value && !isPinned(a.id)) {
       if (activeType.value) {
         if (usageFor(a)?.confirmedAt) return false;
       } else if (a.lastUsedAt !== null) return false;
@@ -600,6 +634,9 @@ async function copyEmail(account: AccountView): Promise<void> {
     if (copiedId.value === account.id) copiedId.value = null;
   }, 2000);
 
+  // Pinned before the mark, so the row cannot flicker out of the list between the two.
+  pin(account.id);
+
   try {
     const updated = await markAccountCopied(account.id, activeType.value || undefined);
     replaceAccount(updated);
@@ -618,6 +655,11 @@ async function copyEmail(account: AccountView): Promise<void> {
   } catch (err) {
     error.value = errorMessage(err, "Could not record the copy");
   }
+}
+
+/** Lets a finished row go, and stops the poll that was keeping an eye on it. */
+function release(id: number): void {
+  unpin(id);
 }
 
 function hasUsage(accountId: number, type: string): boolean {

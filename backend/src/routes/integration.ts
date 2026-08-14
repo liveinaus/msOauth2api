@@ -14,6 +14,7 @@ import {
   getUsage,
   leaseAccount,
   listUsages,
+  normaliseType,
   poolStats,
   releaseUsage,
 } from "../db/usages";
@@ -41,14 +42,26 @@ function sendError(res: Response, error: unknown): void {
   res.status(500).json({ error: message });
 }
 
-/** Every endpoint here names a type; it is the whole basis of the pool. */
+/**
+ * Every endpoint here names a type; it is the whole basis of the pool.
+ *
+ * The normalised form is what comes back, so "Telegram", "telegram" and " TELEGRAM " are
+ * one type all the way through: the same pool, the same records, and the same spelling in
+ * every response a caller has to compare against.
+ */
 function requireType(params: Record<string, string>, res: Response): string | null {
   const type = params.type?.trim();
   if (!type) {
     res.status(400).json({ error: "type is required" });
     return null;
   }
-  return type;
+  return normaliseType(type);
+}
+
+/** The optional counterpart, for endpoints where a type narrows the search but is not required. */
+function optionalType(params: Record<string, string>): string | undefined {
+  const type = params.type?.trim();
+  return type ? normaliseType(type) : undefined;
 }
 
 function requireStoredAccount(params: Record<string, string>, res: Response): Account | null {
@@ -118,7 +131,7 @@ async function handleGetCode(req: Request, res: Response): Promise<void> {
   const account = requireStoredAccount(params, res);
   if (!account) return;
 
-  const type = params.type?.trim();
+  const type = optionalType(params);
   const usage = type ? getUsage(account.id, type) : undefined;
 
   // Default window is the lease: without it, a code left over from a previous run for the
@@ -203,7 +216,7 @@ router.get("/email-status", requireApiAccess, (req, res) => {
   const account = requireStoredAccount(params, res);
   if (!account) return;
 
-  const type = params.type?.trim();
+  const type = optionalType(params);
   const usages = type
     ? [getUsage(account.id, type)].filter((u): u is NonNullable<typeof u> => Boolean(u))
     : listUsages(account.id);

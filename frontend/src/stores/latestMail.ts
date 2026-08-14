@@ -38,6 +38,39 @@ let tickTimer: number | null = null;
 
 const accountListeners = new Set<(account: AccountView) => void>();
 
+/**
+ * Rows being worked on right now.
+ *
+ * Copying an address is what marks it used, so with "hide used" on the row would disappear
+ * at the exact moment its code is about to arrive. A pinned row ignores that filter until
+ * it is let go, which keeps the address and its code in front of you for as long as the job
+ * takes. Kept here rather than in the view so it survives a trip to another page, alongside
+ * the poll it belongs to.
+ */
+const pinned = ref<number[]>([]);
+
+export function isPinned(id: number): boolean {
+  return pinned.value.includes(id);
+}
+
+export function pinnedCount(): number {
+  return pinned.value.length;
+}
+
+export function pin(id: number): void {
+  if (!isPinned(id)) pinned.value = [...pinned.value, id];
+}
+
+export function unpin(id: number): void {
+  pinned.value = pinned.value.filter((value) => value !== id);
+  stopPolling(id);
+}
+
+export function clearPins(): void {
+  pinned.value.forEach(stopPolling);
+  pinned.value = [];
+}
+
 /** Lets the accounts table update a row when a poll brings back a newer account record. */
 export function onAccountUpdate(listener: (account: AccountView) => void): () => void {
   accountListeners.add(listener);
