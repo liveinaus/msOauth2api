@@ -37,10 +37,11 @@
             <th>{{ t("mail.subject") }}</th>
             <th>{{ t("mail.code") }}</th>
             <th>{{ t("mail.date") }}</th>
+            <th>{{ t("common.actions") }}</th>
           </tr>
         </thead>
         <tbody>
-          <tr v-for="(message, index) in pageItems" :key="index">
+          <tr v-for="(message, index) in pageItems" :key="message.id ?? index">
             <td>{{ message.send }}</td>
             <td class="wrap">
               <span class="clickable" @click="open(message)">{{ message.subject || "(no subject)" }}</span>
@@ -49,6 +50,20 @@
               <span v-if="message.code" class="code-chip">{{ message.code }}</span>
             </td>
             <td>{{ formatDate(message.date) }}</td>
+            <td>
+              <button
+                class="btn btn-sm btn-danger"
+                :disabled="!message.id || deletingId === message.id"
+                :title="message.id ? t('mail.deleteOne') : t('mail.deleteUnavailable')"
+                @click="confirmDelete(message)"
+              >
+                <i
+                  :class="
+                    deletingId === message.id ? 'fa-solid fa-circle-notch fa-spin' : 'fa-solid fa-trash'
+                  "
+                ></i>
+              </button>
+            </td>
           </tr>
         </tbody>
       </table>
@@ -102,6 +117,14 @@
           <button v-if="aiAvailable" class="btn" :disabled="aiBusy" @click="analyse">
             <i class="fa-solid fa-wand-magic-sparkles"></i> {{ t("mail.aiAnalyse") }}
           </button>
+          <button
+            class="btn btn-danger"
+            :disabled="!active.id"
+            :title="active.id ? t('mail.deleteOne') : t('mail.deleteUnavailable')"
+            @click="confirmDelete(active)"
+          >
+            <i class="fa-solid fa-trash"></i> {{ t("common.delete") }}
+          </button>
           <button class="btn" @click="close">{{ t("common.close") }}</button>
         </div>
       </div>
@@ -121,6 +144,20 @@
         <div class="modal-footer">
           <button v-if="aiBusy" class="btn" @click="stopAi">{{ t("common.stop") }}</button>
           <button class="btn" @click="closeAi">{{ t("common.close") }}</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Single message deletion -->
+    <div v-if="pendingDelete" class="modal-overlay" @click.self="pendingDelete = null">
+      <div class="modal" style="max-width: 420px">
+        <div class="modal-header">{{ t("mail.deleteOne") }}</div>
+        <div class="modal-body">
+          {{ t("mail.deleteConfirm", { subject: pendingDelete.subject || "(no subject)" }) }}
+        </div>
+        <div class="modal-footer">
+          <button class="btn" @click="pendingDelete = null">{{ t("common.cancel") }}</button>
+          <button class="btn btn-danger" @click="runDelete">{{ t("common.delete") }}</button>
         </div>
       </div>
     </div>
@@ -148,6 +185,7 @@ import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 import PaginationBar from "../components/PaginationBar.vue";
 import {
+  deleteMailMessage,
   errorMessage,
   fetchHealth,
   fetchMail,
@@ -156,6 +194,7 @@ import {
   type Mailbox,
 } from "../api/client";
 import { t } from "../i18n";
+import { ALL_PAGE_SIZE, pageSlice } from "../utils/pagination";
 import { persistentRef } from "../utils/prefs";
 
 const props = defineProps<{ email: string }>();
@@ -172,7 +211,16 @@ const page = ref(1);
 // different sizes. The folder tab is left alone, being navigation rather than a filter.
 const pageSize = persistentRef("mail.pageSize", 25);
 
+// Paging is client-side, so the fetch has to cover the largest page the user can pick:
+// "All" asks for the API's ceiling instead of the usual first hundred.
+const MAIL_FETCH_DEFAULT = 100;
+const MAIL_FETCH_MAX = 1000;
+const fetchLimit = computed(() => (pageSize.value === ALL_PAGE_SIZE ? MAIL_FETCH_MAX : MAIL_FETCH_DEFAULT));
+let loadedLimit = 0;
+
 const active = ref<MailMessage | null>(null);
+const pendingDelete = ref<MailMessage | null>(null);
+const deletingId = ref<string | null>(null);
 const frameUrl = ref("");
 const copied = ref(false);
 const showPurge = ref(false);
@@ -184,21 +232,25 @@ const aiStatus = ref("");
 const aiSummary = ref("");
 let aiController: AbortController | null = null;
 
-const pageItems = computed(() => {
-  const start = (page.value - 1) * pageSize.value;
-  return messages.value.slice(start, start + pageSize.value);
-});
+const pageItems = computed(() => pageSlice(messages.value, page.value, pageSize.value));
 
-watch(pageSize, () => (page.value = 1));
+watch(pageSize, () => {
+  page.value = 1;
+  // Switching to "All" widens the fetch, so what is already in hand is short of it.
+  if (fetchLimit.value > loadedLimit) void load();
+});
 
 async function load(): Promise<void> {
   loading.value = true;
   error.value = "";
+  const limit = fetchLimit.value;
   try {
-    messages.value = await fetchMail(email.value, mailbox.value);
+    messages.value = await fetchMail(email.value, mailbox.value, limit);
+    loadedLimit = limit;
     page.value = 1;
   } catch (err) {
     messages.value = [];
+    loadedLimit = 0;
     error.value = errorMessage(err, t("mail.loadFailed"));
   } finally {
     loading.value = false;
@@ -264,6 +316,41 @@ function formatDate(value: string): string {
   if (!value) return "";
   const parsed = new Date(value);
   return Number.isNaN(parsed.getTime()) ? value : parsed.toLocaleString();
+}
+
+function confirmDelete(message: MailMessage): void {
+  if (!message.id) return;
+  pendingDelete.value = message;
+}
+
+/**
+ * Drops the row locally rather than reloading the folder: a reload is a full mailbox fetch
+ * over Graph or IMAP, and the one row that changed is already known.
+ */
+async function runDelete(): Promise<void> {
+  const message = pendingDelete.value;
+  pendingDelete.value = null;
+  if (!message?.id) return;
+
+  deletingId.value = message.id;
+  error.value = "";
+  try {
+    const result = await deleteMailMessage(email.value, mailbox.value, message.id);
+    if (result.deleted) {
+      messages.value = messages.value.filter((m) => m.id !== message.id);
+      if (active.value?.id === message.id) close();
+      notice.value = t("mail.deleteDone");
+      window.setTimeout(() => (notice.value = ""), 4000);
+    } else {
+      // The id no longer matches anything, so the list is out of date either way.
+      error.value = t("mail.deleteMissing");
+      await load();
+    }
+  } catch (err) {
+    error.value = errorMessage(err, "Could not delete this message");
+  } finally {
+    deletingId.value = null;
+  }
 }
 
 async function runPurge(): Promise<void> {

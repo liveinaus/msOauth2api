@@ -10,14 +10,14 @@ describe("resolveCredentials", () => {
 
   it("passes explicit upstream parameters straight through", () => {
     expect(resolveCredentials({ email: "a@x.com", refresh_token: "rt", client_id: "cid" })).toEqual(
-      { email: "a@x.com", clientId: "cid", refreshToken: "rt" },
+      { email: "a@x.com", clientId: "cid", refreshToken: "rt", authType: "auto" },
     );
   });
 
   it("allows the refresh endpoint to omit the address, as upstream did", () => {
     expect(
       resolveCredentials({ refresh_token: "rt", client_id: "cid" }, { requireEmail: false }),
-    ).toEqual({ email: "", clientId: "cid", refreshToken: "rt" });
+    ).toEqual({ email: "", clientId: "cid", refreshToken: "rt", authType: "auto" });
   });
 
   it("still demands an address on the mail endpoints", () => {
@@ -31,7 +31,44 @@ describe("resolveCredentials", () => {
       email: "b@x.com",
       clientId: "cid-b",
       refreshToken: "rt-b",
+      authType: "auto",
     });
+  });
+
+  it("carries a stored account's auth type", () => {
+    upsertAccount({
+      email: "imap@x.com",
+      password: null,
+      clientId: "cid-i",
+      refreshToken: "rt-i",
+      authType: "imap",
+    });
+
+    expect(resolveCredentials({ email: "imap@x.com" }).authType).toBe("imap");
+  });
+
+  it("lets an explicit auth_type override the stored one", () => {
+    upsertAccount({ email: "e@x.com", password: null, clientId: "cid-e", refreshToken: "rt-e" });
+
+    expect(resolveCredentials({ email: "e@x.com", auth_type: "imap" }).authType).toBe("imap");
+  });
+
+  it("defaults to auto for credentials passed without an auth type", () => {
+    expect(
+      resolveCredentials({ email: "f@x.com", refresh_token: "rt", client_id: "cid" }).authType,
+    ).toBe("auto");
+  });
+
+  it("ignores an unrecognised auth_type rather than failing the read", () => {
+    upsertAccount({
+      email: "g@x.com",
+      password: null,
+      clientId: "cid-g",
+      refreshToken: "rt-g",
+      authType: "imap",
+    });
+
+    expect(resolveCredentials({ email: "g@x.com", auth_type: "pop3" }).authType).toBe("imap");
   });
 
   it("lets an explicit token override the stored one", () => {

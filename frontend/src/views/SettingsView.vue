@@ -105,6 +105,127 @@
       </button>
     </div>
 
+    <!-- Backup and migration -->
+    <div class="card">
+      <div class="card-title">{{ t("settings.backup") }}</div>
+      <p class="hint">{{ t("settings.backupHint") }}</p>
+      <div class="alert alert-warn">
+        <i class="fa-solid fa-triangle-exclamation"></i> {{ t("settings.backupWarning") }}
+      </div>
+
+      <div class="form-row">
+        <div class="form-group">
+          <label class="form-label">{{ t("settings.backupPassphrase") }}</label>
+          <input
+            v-model="exportPassphrase"
+            class="form-input"
+            type="password"
+            autocomplete="new-password"
+            :placeholder="t('settings.backupPassphrasePlaceholder')"
+          />
+          <p class="hint">{{ t("settings.backupPassphraseHint") }}</p>
+        </div>
+        <div class="form-group">
+          <label class="form-label">{{ t("settings.backupPassphraseConfirm") }}</label>
+          <input
+            v-model="exportPassphraseAgain"
+            class="form-input"
+            type="password"
+            autocomplete="new-password"
+          />
+          <p v-if="passphraseMismatch" class="hint" style="color: #b3283a">
+            {{ t("settings.backupPassphraseMismatch") }}
+          </p>
+        </div>
+      </div>
+
+      <div class="btn-row" style="margin-bottom: 18px">
+        <button class="btn" :disabled="exporting || passphraseMismatch" @click="startExport">
+          <i class="fa-solid fa-file-export"></i>
+          {{ exporting ? t("common.loading") : t("settings.backupExport") }}
+        </button>
+      </div>
+
+      <div class="form-row">
+        <div class="form-group">
+          <label class="form-label">{{ t("settings.backupFile") }}</label>
+          <input type="file" accept=".json,application/json" @change="loadBackupFile" />
+          <p v-if="backupName" class="hint">
+            {{ backupName }}
+            <span v-if="backupProtected" class="badge badge-type">{{ t("settings.backupProtected") }}</span>
+          </p>
+        </div>
+        <div class="form-group">
+          <label class="form-label">{{ t("settings.backupMode") }}</label>
+          <select v-model="importMode" class="form-input">
+            <option value="merge">{{ t("settings.backupMerge") }}</option>
+            <option value="replace">{{ t("settings.backupReplace") }}</option>
+          </select>
+          <p class="hint">
+            {{ importMode === "replace" ? t("settings.backupReplaceHint") : t("settings.backupMergeHint") }}
+          </p>
+        </div>
+      </div>
+
+      <div v-if="backupProtected" class="form-group">
+        <label class="form-label">{{ t("settings.backupImportPassphrase") }}</label>
+        <input
+          v-model="importPassphrase"
+          class="form-input"
+          type="password"
+          autocomplete="off"
+          style="max-width: 320px"
+        />
+      </div>
+
+      <div class="form-group">
+        <label class="check-row">
+          <input v-model="importAdmin" type="checkbox" />
+          {{ t("settings.backupIncludeAdmin") }}
+        </label>
+        <p class="hint">{{ t("settings.backupIncludeAdminHint") }}</p>
+      </div>
+
+      <button class="btn btn-primary" :disabled="!backupText || importing" @click="runBackupImport">
+        {{ importing ? t("common.saving") : t("settings.backupImport") }}
+      </button>
+
+      <div v-if="importReport" class="alert alert-ok" style="margin-top: 14px">
+        {{
+          t("settings.backupDone", {
+            accounts: importReport.accounts,
+            types: importReport.usageTypes,
+            keys: importReport.apiKeys,
+          })
+        }}
+      </div>
+      <div v-if="importReport?.skipped.length" class="alert alert-warn">
+        <div>{{ t("settings.backupSkipped", { n: importReport.skipped.length }) }}</div>
+        <div v-for="(row, index) in importReport.skipped.slice(0, 20)" :key="index">
+          {{ row.where }}: {{ row.reason }}
+        </div>
+      </div>
+    </div>
+
+    <!-- Unprotected export warning -->
+    <div v-if="confirmPlain" class="modal-overlay" @click.self="confirmPlain = false">
+      <div class="modal" style="max-width: 460px">
+        <div class="modal-header">{{ t("settings.backupPlainTitle") }}</div>
+        <div class="modal-body">
+          <div class="alert alert-warn">
+            <i class="fa-solid fa-triangle-exclamation"></i> {{ t("settings.backupPlainWarning") }}
+          </div>
+          <p class="hint">{{ t("settings.backupPlainAdvice") }}</p>
+        </div>
+        <div class="modal-footer">
+          <button class="btn" @click="confirmPlain = false">{{ t("common.cancel") }}</button>
+          <button class="btn btn-danger" @click="downloadBackup(true)">
+            {{ t("settings.backupPlainConfirm") }}
+          </button>
+        </div>
+      </div>
+    </div>
+
     <!-- API keys -->
     <div class="card">
       <div class="card-title">{{ t("settings.apiKeys") }}</div>
@@ -162,18 +283,23 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, ref } from "vue";
+import { computed, onMounted, ref } from "vue";
 import {
   createApiKeyRequest,
   deleteApiKeyRequest,
   errorMessage,
   fetchApiKeys,
+  fetchBackupFile,
   fetchHealth,
   fetchPanelSettings,
+  importBackupFile,
+  logout,
   savePanelSettings,
   updateCredentials,
   DEFAULT_PANEL_SETTINGS,
   type ApiKeyView,
+  type BackupImportReport,
+  type BackupMode,
   type HealthView,
   type PanelSettings,
 } from "../api/client";
@@ -196,6 +322,19 @@ const newKeyName = ref("");
 const creatingKey = ref(false);
 const freshKey = ref("");
 const keyCopied = ref(false);
+
+const exporting = ref(false);
+const backupText = ref("");
+const backupName = ref("");
+const backupProtected = ref(false);
+const exportPassphrase = ref("");
+const exportPassphraseAgain = ref("");
+const importPassphrase = ref("");
+const confirmPlain = ref(false);
+const importMode = ref<BackupMode>("merge");
+const importAdmin = ref(false);
+const importing = ref(false);
+const importReport = ref<BackupImportReport | null>(null);
 
 function flash(message: string): void {
   notice.value = message;
@@ -280,6 +419,104 @@ async function removeKey(id: number): Promise<void> {
     apiKeys.value = await fetchApiKeys();
   } catch (err) {
     error.value = errorMessage(err, "Could not delete key");
+  }
+}
+
+const passphraseMismatch = computed(
+  () => Boolean(exportPassphraseAgain.value) && exportPassphrase.value !== exportPassphraseAgain.value,
+);
+
+/**
+ * An unprotected export is a file holding every refresh token in the clear, so it takes a
+ * second, explicit decision rather than one click.
+ */
+function startExport(): void {
+  error.value = "";
+  if (exportPassphrase.value.trim()) {
+    void downloadBackup(false);
+    return;
+  }
+  confirmPlain.value = true;
+}
+
+async function downloadBackup(unprotected: boolean): Promise<void> {
+  confirmPlain.value = false;
+  error.value = "";
+  exporting.value = true;
+  try {
+    const passphrase = unprotected ? "" : exportPassphrase.value.trim();
+    const blob = await fetchBackupFile({ passphrase });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    const stamp = new Date().toISOString().slice(0, 10);
+    link.href = url;
+    link.download = passphrase
+      ? `msoauth2api-backup-${stamp}.protected.json`
+      : `msoauth2api-backup-${stamp}.json`;
+    link.click();
+    URL.revokeObjectURL(url);
+  } catch (err) {
+    error.value = errorMessage(err, "Export failed");
+  } finally {
+    exporting.value = false;
+  }
+}
+
+function loadBackupFile(event: Event): void {
+  const file = (event.target as HTMLInputElement).files?.[0];
+  if (!file) return;
+  importReport.value = null;
+  backupName.value = file.name;
+  const reader = new FileReader();
+  reader.onload = () => {
+    backupText.value = String(reader.result ?? "");
+    try {
+      const parsed = JSON.parse(backupText.value) as { format?: string };
+      backupProtected.value = parsed.format === "msoauth2api.backup.encrypted";
+    } catch {
+      backupProtected.value = false;
+    }
+  };
+  reader.readAsText(file);
+}
+
+/**
+ * Restoring the admin login replaces the credential this session was issued against, so the
+ * server retires every token including this one. Signing out here makes that deliberate
+ * rather than the panel appearing to break on the next request.
+ */
+async function runBackupImport(): Promise<void> {
+  if (importMode.value === "replace" && !window.confirm(t("settings.backupReplaceConfirm"))) return;
+
+  let document: unknown;
+  try {
+    document = JSON.parse(backupText.value);
+  } catch {
+    error.value = t("settings.backupInvalid");
+    return;
+  }
+
+  error.value = "";
+  importing.value = true;
+  importReport.value = null;
+  try {
+    const report = await importBackupFile(document, {
+      passphrase: importPassphrase.value,
+      mode: importMode.value,
+      includeAdmin: importAdmin.value,
+    });
+    importReport.value = report;
+
+    if (report.admin) {
+      flash(t("settings.backupSignOut"));
+      window.setTimeout(logout, 3000);
+      return;
+    }
+    await load();
+  } catch (err) {
+    error.value = errorMessage(err, "Import failed");
+  } finally {
+    importing.value = false;
   }
 }
 

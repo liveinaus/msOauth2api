@@ -1,5 +1,5 @@
 import type { Request } from "express";
-import type { Mailbox } from "../types";
+import { parseAuthType, type Mailbox } from "../types";
 import { getAccountByEmail } from "../db/accounts";
 import type { MailCredentials } from "../services/mail";
 
@@ -50,6 +50,10 @@ export class ParamError extends Error {
  * with only a token and a client id -- an address is meaningless there, since nothing is
  * connected to a mailbox. The mail and send endpoints do need one, because IMAP and SMTP
  * authenticate as a specific user.
+ *
+ * `auth_type` says how the token has to be spent. A stored account carries its own, and an
+ * explicit parameter overrides it the same way an explicit token does, so a caller passing
+ * credentials this install has never seen can still name the older IMAP grant.
  */
 export function resolveCredentials(
   params: Record<string, string>,
@@ -59,10 +63,11 @@ export function resolveCredentials(
   const email = params.email?.trim() ?? "";
   const refreshToken = params.refresh_token?.trim();
   const clientId = params.client_id?.trim();
+  const authType = parseAuthType(params.auth_type);
 
   if (refreshToken && clientId) {
     if (requireEmail && !email) throw new ParamError("Missing required parameter: email");
-    return { email, clientId, refreshToken };
+    return { email, clientId, refreshToken, authType: authType ?? "auto" };
   }
 
   if (!email) {
@@ -81,6 +86,7 @@ export function resolveCredentials(
     email: stored.email,
     clientId: clientId || stored.clientId,
     refreshToken: refreshToken || stored.refreshToken,
+    authType: authType ?? stored.authType,
   };
 }
 

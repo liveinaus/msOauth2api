@@ -28,6 +28,7 @@ function toMailMessage(item: GraphMessage): MailMessage {
     html,
     // Upstream reported createdDateTime here, so it stays the primary for compatibility.
     date: item.createdDateTime ?? item.receivedDateTime ?? "",
+    id: item.id,
   };
 
   const code = extractCode(text, html, message.subject);
@@ -74,6 +75,11 @@ export async function listMessages(
   );
   const payload = (await response.json()) as { value?: GraphMessage[] };
   return (payload.value ?? []).map(toMailMessage);
+}
+
+/** Deletes one message. Graph ids are mailbox-wide, so the folder does not come into it. */
+export async function deleteMessage(accessToken: string, id: string): Promise<void> {
+  await graphRequest(`/me/messages/${encodeURIComponent(id)}`, accessToken, { method: "DELETE" });
 }
 
 /**

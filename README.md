@@ -7,7 +7,9 @@ managing accounts and reading mail. Self-hosted as a single Docker container.
 
 Given a Microsoft `client_id` and a `refresh_token`, it reads and sends mail without you
 touching OAuth. It tries **Graph API** first and falls back to **IMAP** when the token was
-not granted `Mail.Read` -- Graph is faster and less rate-limited.
+not granted `Mail.Read` -- Graph is faster and less rate-limited. Accounts consented only to
+the older Outlook IMAP permission can be marked to go straight to IMAP; see
+[Accounts on the older IMAP grant](#accounts-on-the-older-imap-grant).
 
 - Read the latest message, or a whole folder (inbox and junk)
 - Automatic verification-code extraction
@@ -230,6 +232,41 @@ object** on the IMAP path. Both are reproduced exactly, by transport, so clients
 against either keep working. Pass `shape=array` or `shape=object` to stop depending on which
 transport served the request.
 
+## Backup and migration
+
+Settings has a **Backup and migration** card that exports the whole panel as one JSON
+document and restores it on another instance: every account with its metadata and usage
+history, the type configuration, the panel settings, the API keys (as hashes) and the admin
+login.
+
+Both endpoints take a panel session, so they are reachable from a script with a login token:
+
+```bash
+# Export
+curl -H "Authorization: Bearer $TOKEN" \
+  https://panel.example.com/api/backup/export -o backup.json
+
+# Restore on another instance (merge is the default; "replace" wipes first)
+curl -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d "{\"mode\":\"replace\",\"includeAdmin\":true,\"backup\":$(cat backup.json)}" \
+  https://other.example.com/api/backup/import
+```
+
+Notes:
+
+- **JSON, not a copy of the SQLite file.** Secrets are encrypted at rest with
+  `MSAPI_DATA_KEY`, so a file copy is unreadable on an instance holding a different key. The
+  export decrypts and the import re-encrypts under the target's own key, which means the two
+  instances need not share one.
+- **The file holds refresh tokens and mailbox passwords in the clear.** It can read every
+  mailbox on the panel. Treat it like the database.
+- **Accounts are matched by address**, not by row id, so a merge into a populated panel
+  updates the addresses it knows and adds the rest.
+- **The admin login is only restored when `includeAdmin` is set.** Doing so retires every
+  session on the target, including the one that ran the import.
+- **API keys travel as hashes**, so existing scripts keep working after a migration without
+  the plain keys ever being written to the file.
+
 ## Differences from upstream
 
 Behaviour that changed deliberately, beyond the port itself:
@@ -310,6 +347,45 @@ email----password----client_id----refresh_token
 ```
 
 Re-importing an address updates it rather than adding a duplicate.
+
+### Accounts on the older IMAP grant
+
+Some accounts were only ever consented to the Outlook IMAP permission, never to Graph. Their
+tokens have to ask for `https://outlook.office.com/IMAP.AccessAsUser.All` by name, so they
+are marked with a **protocol** of `imap` and skip the Graph probe entirely. Everything else
+stays on `auto`, which is the original Graph-first behaviour and remains the default.
+
+Marking is an optimisation, not a requirement: an `auto` account with no Graph consent has
+its Graph probe rejected outright, and that rejection now degrades to IMAP rather than
+surfacing as an error, so the account still reads. Marking it `imap` just skips the probe --
+worth doing for a large batch, since that is one guaranteed-to-fail, rate-limited call per
+account on every poll.
+
+Set it in any of these ways:
+
+- **Panel**: tick the accounts, then pick `IMAP only (old OAuth2)` from the protocol
+  selector in the toolbar. The account list shows an `IMAP` badge against each one.
+- **Import**: choose the protocol in the import dialog to apply it to the whole file, or add
+  an optional fifth field to a line to set it for that account alone:
+
+  ```
+  email----password----client_id----refresh_token----imap
+  ```
+
+- **API**: `POST /api/accounts/auth-type` with `{"ids": [105, 106], "authType": "imap"}`, or
+  pass `authType` to `POST /api/accounts` and `PATCH /api/accounts/:id`.
+
+The mail endpoints also take an `auth_type` parameter alongside `refresh_token` and
+`client_id`, for callers passing credentials this install has never stored.
+
+Exports now carry the protocol as a fifth field so a backup round-trips. Four-field files
+still import exactly as before, and an import that says nothing about the protocol leaves
+whatever an existing account is already set to.
+
+Sending works too. `SMTP.Send` is a separate permission from the IMAP read scope -- a token
+scoped for one does not authenticate the other -- so `/api/send-mail` fetches its own
+SMTP.Send token for these accounts. It relies on the registration having consented to
+SMTP.Send, which the bulk consumer registrations these accounts come from generally have.
 
 ## Licence
 

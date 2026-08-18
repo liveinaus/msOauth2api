@@ -60,6 +60,37 @@ export function setAdminUsername(username: string): void {
   bumpTokenEpoch();
 }
 
+export type AdminSnapshot = {
+  username: string;
+  /** The stored argon2 hash, never the password itself. Null on an install with no admin yet. */
+  passwordHash: string | null;
+  usingDefaultPassword: boolean;
+};
+
+/** The admin login exactly as stored, for a whole-system backup. */
+export function adminSnapshot(): AdminSnapshot {
+  return {
+    username: adminUsername(),
+    passwordHash: getSetting(PASSWORD_HASH_KEY) ?? null,
+    usingDefaultPassword: usingDefaultPassword(),
+  };
+}
+
+/**
+ * Installs a backed-up admin login, so a migrated instance is signed into with the same
+ * details as the one it came from. The hash is stored verbatim rather than rehashed --
+ * argon2 output is self-describing, and the plain password is not in the backup to rehash.
+ *
+ * Every session is retired, the one that ran the import included: the credential behind it
+ * has just been replaced.
+ */
+export function restoreAdminSnapshot(snapshot: AdminSnapshot): void {
+  setSetting(USERNAME_KEY, snapshot.username);
+  if (snapshot.passwordHash) setSetting(PASSWORD_HASH_KEY, snapshot.passwordHash);
+  setSetting(BOOTSTRAP_PASSWORD_KEY, snapshot.usingDefaultPassword ? "1" : "0");
+  bumpTokenEpoch();
+}
+
 // ── Token revocation ──────────────────────────────────────────────────────────
 
 const TOKEN_EPOCH_KEY = "token_epoch";

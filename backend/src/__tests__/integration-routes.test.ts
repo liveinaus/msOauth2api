@@ -13,6 +13,8 @@ const dbFile = path.join(os.tmpdir(), `msapi-integration-${process.pid}.db`);
 process.env.DB_PATH = dbFile;
 
 let folderMessages: FolderMessage[] = [];
+/** Set to make the mocked transport refuse, as Outlook does for an IMAP-less mailbox. */
+let readFailure: Error | null = null;
 
 vi.mock("../middleware/auth", () => ({
   requireApiAccess: (_req: unknown, _res: unknown, next: () => void) => next(),
@@ -22,11 +24,14 @@ vi.mock("../middleware/auth", () => ({
 }));
 
 vi.mock("../services/mail", () => ({
-  readFolders: async () => ({
-    transport: "graph" as const,
-    rotatedRefreshToken: null,
-    messages: folderMessages,
-  }),
+  readFolders: async () => {
+    if (readFailure) throw readFailure;
+    return {
+      transport: "graph" as const,
+      rotatedRefreshToken: null,
+      messages: folderMessages,
+    };
+  },
   // The accounts router imports this too, and a name missing from a mock fails at link time.
   pickForPanel: (messages: FolderMessage[]) => messages.find((m) => m.code) ?? messages[0] ?? null,
 }));
@@ -86,6 +91,7 @@ function codeMail(overrides: Partial<FolderMessage> = {}): FolderMessage {
 describe("address pool API", () => {
   beforeEach(() => {
     folderMessages = [codeMail()];
+    readFailure = null;
   });
 
   it("rejects a handout with no type", async () => {
@@ -387,5 +393,41 @@ describe("accounts list", () => {
 
     const lapsedRow = rows.find((r) => r.email === lapsed.account.email);
     expect(lapsedRow?.usages.some((u) => u.type === "lapsed")).toBe(false);
+  });
+});
+
+describe("a mailbox that will not serve IMAP", () => {
+  it("answers 502, records the reason, and stops offering the address", async () => {
+    const { ImapUnavailableError } = await import("../services/imap");
+    const account = upsertAccount({
+      email: "noimap@x.com",
+      password: null,
+      clientId: "c",
+      refreshToken: "t",
+    });
+
+    // Claim it for a type of its own, so this cannot disturb the pools above.
+    const lease = await call("/api/get-available-email?type=NoImap");
+    expect(lease.body.email).toBeDefined();
+
+    readFailure = new ImapUnavailableError("User is authenticated but not connected.");
+    const { status, body } = await call("/api/get-code?email=noimap@x.com&type=NoImap");
+
+    // Not a 500: nothing is wrong on this side, and not "pending" either, or a caller would
+    // poll a dead mailbox for the whole window.
+    expect(status).toBe(502);
+    expect(body).toMatchObject({ details: "User is authenticated but not connected." });
+
+    const marked = getAccountByEmail("noimap@x.com")!;
+    expect(marked.lastRefreshError).toMatch(/not available over IMAP/);
+
+    // The point of recording it: the pool skips the address from here on.
+    readFailure = null;
+    const offered: string[] = [];
+    for (let i = 0; i < 5; i++) {
+      const next = await call(`/api/get-available-email?type=Sweep${i}`);
+      if (next.status === 200) offered.push(next.body.email as unknown as string);
+    }
+    expect(offered).not.toContain(account.email);
   });
 });

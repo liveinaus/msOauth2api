@@ -1,13 +1,68 @@
-import type { Mailbox, MailMessage, MailTransport } from "../types";
+import type { AuthType, Mailbox, MailMessage, MailTransport } from "../types";
 import * as graph from "./graph";
 import * as imap from "./imap";
-import { getMailAccessToken, probeGraphAccess } from "./oauth";
+import {
+  getImapAccessToken,
+  getMailAccessToken,
+  isGraphConsentFailure,
+  probeGraphAccess,
+} from "./oauth";
 
 export type MailCredentials = {
   email: string;
   clientId: string;
   refreshToken: string;
+  /** Absent means "auto", so a caller that predates the field behaves as it always did. */
+  authType?: AuthType;
 };
+
+type OpenTransport = {
+  kind: MailTransport;
+  accessToken: string;
+  rotatedRefreshToken: string | null;
+};
+
+/**
+ * Gets a token and settles which transport it is good for.
+ *
+ * Every operation below needs exactly this and then differs only in what it does with the
+ * connection, so the choice lives here rather than being repeated four times.
+ *
+ * An "imap" account skips the Graph probe outright: its consent never covered Graph, so the
+ * probe could only ever come back unavailable, having spent a round trip to say so.
+ *
+ * On the "auto" path the probe can fail two ways for a Graph-less account: it may answer
+ * without Mail.Read (available: false), or, when there is no Graph consent at all, it may be
+ * rejected outright and throw. Both mean the same thing here -- use IMAP -- so a consent
+ * failure degrades to the IMAP path rather than surfacing as an error. A genuinely dead
+ * token still throws, from whichever grant it is spent on.
+ */
+async function openTransport(credentials: MailCredentials): Promise<OpenTransport> {
+  if (credentials.authType === "imap") {
+    const token = await getImapAccessToken(credentials.refreshToken, credentials.clientId);
+    return {
+      kind: "imap",
+      accessToken: token.accessToken,
+      rotatedRefreshToken: token.refreshToken,
+    };
+  }
+
+  try {
+    const probe = await probeGraphAccess(credentials.refreshToken, credentials.clientId);
+    if (probe.available) {
+      return {
+        kind: "graph",
+        accessToken: probe.accessToken,
+        rotatedRefreshToken: probe.refreshToken,
+      };
+    }
+  } catch (error) {
+    if (!isGraphConsentFailure(error)) throw error;
+  }
+
+  const token = await getMailAccessToken(credentials.refreshToken, credentials.clientId);
+  return { kind: "imap", accessToken: token.accessToken, rotatedRefreshToken: token.refreshToken };
+}
 
 export type MailResult = {
   messages: MailMessage[];
@@ -21,28 +76,24 @@ export type MailResult = {
  * not rate-limited the way IMAP is, and does not need a second round trip per message.
  *
  * The probe doubles as the Graph token fetch, so choosing a transport costs no extra
- * request compared with going straight to IMAP.
+ * request compared with going straight to IMAP. An "imap" account bypasses the choice.
  */
 export async function readMail(
   credentials: MailCredentials,
   mailbox: Mailbox,
   limit: number,
 ): Promise<MailResult> {
-  const probe = await probeGraphAccess(credentials.refreshToken, credentials.clientId);
+  const transport = await openTransport(credentials);
 
-  if (probe.available) {
-    return {
-      messages: await graph.listMessages(probe.accessToken, mailbox, limit),
-      transport: "graph",
-      rotatedRefreshToken: probe.refreshToken,
-    };
-  }
+  const messages =
+    transport.kind === "graph"
+      ? await graph.listMessages(transport.accessToken, mailbox, limit)
+      : await imap.fetchMessages(credentials.email, transport.accessToken, mailbox, limit);
 
-  const token = await getMailAccessToken(credentials.refreshToken, credentials.clientId);
   return {
-    messages: await imap.fetchMessages(credentials.email, token.accessToken, mailbox, limit),
-    transport: "imap",
-    rotatedRefreshToken: token.refreshToken,
+    messages,
+    transport: transport.kind,
+    rotatedRefreshToken: transport.rotatedRefreshToken,
   };
 }
 
@@ -67,30 +118,21 @@ export async function readFolders(
   mailboxes: Mailbox[],
   limit: number,
 ): Promise<FoldersResult> {
-  const probe = await probeGraphAccess(credentials.refreshToken, credentials.clientId);
+  const transport = await openTransport(credentials);
   const messages: FolderMessage[] = [];
 
-  if (probe.available) {
-    for (const mailbox of mailboxes) {
-      const found = await graph.listMessages(probe.accessToken, mailbox, limit);
-      messages.push(...found.map((message) => ({ ...message, mailbox })));
-    }
-    return {
-      messages: sortByDate(messages),
-      transport: "graph",
-      rotatedRefreshToken: probe.refreshToken,
-    };
-  }
-
-  const token = await getMailAccessToken(credentials.refreshToken, credentials.clientId);
   for (const mailbox of mailboxes) {
-    const found = await imap.fetchMessages(credentials.email, token.accessToken, mailbox, limit);
+    const found =
+      transport.kind === "graph"
+        ? await graph.listMessages(transport.accessToken, mailbox, limit)
+        : await imap.fetchMessages(credentials.email, transport.accessToken, mailbox, limit);
     messages.push(...found.map((message) => ({ ...message, mailbox })));
   }
+
   return {
     messages: sortByDate(messages),
-    transport: "imap",
-    rotatedRefreshToken: token.refreshToken,
+    transport: transport.kind,
+    rotatedRefreshToken: transport.rotatedRefreshToken,
   };
 }
 
@@ -114,6 +156,39 @@ export function pickForPanel<T extends { code?: string }>(messages: T[]): T | nu
   return messages.find((message) => message.code) ?? messages[0] ?? null;
 }
 
+export type DeleteResult = {
+  deleted: boolean;
+  transport: MailTransport;
+  rotatedRefreshToken: string | null;
+};
+
+/**
+ * Deletes one message, over whichever transport this account uses.
+ *
+ * The id has to have come from a read over the same transport: Graph ids and IMAP UIDs are
+ * not interchangeable. That holds in practice because the transport is decided by the
+ * account's granted scopes, not per request.
+ */
+export async function deleteMessage(
+  credentials: MailCredentials,
+  mailbox: Mailbox,
+  id: string,
+): Promise<DeleteResult> {
+  const transport = await openTransport(credentials);
+
+  if (transport.kind === "graph") {
+    await graph.deleteMessage(transport.accessToken, id);
+    return {
+      deleted: true,
+      transport: "graph",
+      rotatedRefreshToken: transport.rotatedRefreshToken,
+    };
+  }
+
+  const deleted = await imap.deleteMessage(credentials.email, transport.accessToken, mailbox, id);
+  return { deleted, transport: "imap", rotatedRefreshToken: transport.rotatedRefreshToken };
+}
+
 export type PurgeResult = {
   deleted: number;
   transport: MailTransport;
@@ -125,14 +200,12 @@ export async function purgeMail(
   credentials: MailCredentials,
   mailbox: Mailbox,
 ): Promise<PurgeResult> {
-  const probe = await probeGraphAccess(credentials.refreshToken, credentials.clientId);
+  const transport = await openTransport(credentials);
 
-  if (probe.available) {
-    const { deleted } = await graph.purgeFolder(probe.accessToken, mailbox);
-    return { deleted, transport: "graph", rotatedRefreshToken: probe.refreshToken };
-  }
+  const { deleted } =
+    transport.kind === "graph"
+      ? await graph.purgeFolder(transport.accessToken, mailbox)
+      : await imap.purgeFolder(credentials.email, transport.accessToken, mailbox);
 
-  const token = await getMailAccessToken(credentials.refreshToken, credentials.clientId);
-  const { deleted } = await imap.purgeFolder(credentials.email, token.accessToken, mailbox);
-  return { deleted, transport: "imap", rotatedRefreshToken: token.refreshToken };
+  return { deleted, transport: transport.kind, rotatedRefreshToken: transport.rotatedRefreshToken };
 }

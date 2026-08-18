@@ -32,6 +32,18 @@
           <i class="fa-solid fa-rotate"></i>
           {{ refreshing ? t("accounts.refreshing") : t("accounts.refreshTokens") }}
         </button>
+        <select
+          v-model="bulkAuthType"
+          class="form-input"
+          style="width: 170px"
+          :disabled="!selected.size || markingAuthType"
+          :title="t('accounts.setAuthTypeHint')"
+          @change="applyBulkAuthType"
+        >
+          <option value="">{{ t("accounts.setAuthType") }}</option>
+          <option value="auto">{{ t("accounts.authType.auto") }}</option>
+          <option value="imap">{{ t("accounts.authType.imap") }}</option>
+        </select>
         <button class="btn btn-danger" :disabled="!selected.size" @click="confirmDelete">
           <i class="fa-solid fa-trash"></i> {{ t("accounts.deleteSelected") }}
         </button>
@@ -141,15 +153,25 @@
               </div>
             </td>
             <td>
-              <span v-if="account.disabled" class="badge badge-off">{{ t("accounts.disabled") }}</span>
-              <span
-                v-else-if="account.lastRefreshError"
-                class="badge badge-err"
-                :title="account.lastRefreshError"
-              >
-                <i class="fa-solid fa-triangle-exclamation"></i>
-              </span>
-              <span v-else class="badge badge-ok">{{ t("accounts.enabled") }}</span>
+              <div class="cell-row">
+                <span v-if="account.disabled" class="badge badge-off">{{ t("accounts.disabled") }}</span>
+                <span
+                  v-else-if="account.lastRefreshError"
+                  class="badge badge-err"
+                  :title="account.lastRefreshError"
+                >
+                  <i class="fa-solid fa-triangle-exclamation"></i>
+                </span>
+                <span v-else class="badge badge-ok">{{ t("accounts.enabled") }}</span>
+                <!-- Only the non-default grant is worth a badge; "auto" is most of the list. -->
+                <span
+                  v-if="account.authType === 'imap'"
+                  class="badge badge-type"
+                  :title="t('accounts.authTypeHint.imap')"
+                >
+                  IMAP
+                </span>
+              </div>
             </td>
             <td>{{ formatTime(account.lastRefreshAt) }}</td>
             <td>
@@ -332,6 +354,14 @@
             <input v-model="delimiter" class="form-input" />
           </div>
           <div class="form-group">
+            <label class="form-label">{{ t("accounts.authTypeLabel") }}</label>
+            <select v-model="importAuthType" class="form-input">
+              <option value="auto">{{ t("accounts.authType.auto") }}</option>
+              <option value="imap">{{ t("accounts.authType.imap") }}</option>
+            </select>
+            <p class="hint">{{ t("accounts.importAuthTypeHint") }}</p>
+          </div>
+          <div class="form-group">
             <label class="form-label">{{ t("accounts.importPaste") }}</label>
             <textarea v-model="importText" class="form-textarea" spellcheck="false"></textarea>
           </div>
@@ -368,6 +398,13 @@
           <div class="form-group">
             <label class="form-label">{{ t("accounts.token") }}</label>
             <input v-model="draft.refreshToken" class="form-input" />
+          </div>
+          <div class="form-group">
+            <label class="form-label">{{ t("accounts.authTypeLabel") }}</label>
+            <select v-model="draft.authType" class="form-input">
+              <option value="auto">{{ t("accounts.authType.auto") }}</option>
+              <option value="imap">{{ t("accounts.authType.imap") }}</option>
+            </select>
           </div>
           <div class="form-group">
             <label class="form-label">{{ t("accounts.remark") }}</label>
@@ -410,17 +447,20 @@ import {
   importAccounts,
   markAccountCopied,
   refreshAccountTokens,
+  setAccountsAuthType,
   setAccountUsage,
   updateAccount,
   DEFAULT_PANEL_SETTINGS,
   type AccountUsageView,
   type AccountView,
+  type AuthType,
   type MailMessage,
   type PanelSettings,
   type UsageTypeView,
 } from "../api/client";
 import { t } from "../i18n";
 import { copyText } from "../utils/clipboard";
+import { pageCountOf, pageSlice } from "../utils/pagination";
 import { persistentRef } from "../utils/prefs";
 import {
   clearPins,
@@ -485,7 +525,17 @@ const showDelete = ref(false);
 const delimiter = ref("----");
 const importText = ref("");
 const importErrors = ref<{ line: number; reason: string }[]>([]);
-const draft = ref({ email: "", clientId: "", refreshToken: "", remark: "" });
+const importAuthType = ref<AuthType>("auto");
+const draft = ref<{
+  email: string;
+  clientId: string;
+  refreshToken: string;
+  authType: AuthType;
+  remark: string;
+}>({ email: "", clientId: "", refreshToken: "", authType: "auto", remark: "" });
+const markingAuthType = ref(false);
+/** Empty is the placeholder; picking a value applies it and snaps back. */
+const bulkAuthType = ref<AuthType | "">("");
 
 const hideUsedHint = computed(() =>
   activeType.value
@@ -530,10 +580,7 @@ const filtered = computed(() => {
   });
 });
 
-const pageItems = computed(() => {
-  const start = (page.value - 1) * pageSize.value;
-  return filtered.value.slice(start, start + pageSize.value);
-});
+const pageItems = computed(() => pageSlice(filtered.value, page.value, pageSize.value));
 
 const allVisibleSelected = computed(
   () => pageItems.value.length > 0 && pageItems.value.every((a) => selected.value.has(a.id)),
@@ -542,7 +589,7 @@ const allVisibleSelected = computed(
 // A filter or page-size change can leave the view past the last page, which renders as an
 // empty table with rows that do exist.
 watch([filtered, pageSize], () => {
-  const maxPage = Math.max(1, Math.ceil(filtered.value.length / pageSize.value));
+  const maxPage = pageCountOf(filtered.value.length, pageSize.value);
   if (page.value > maxPage) page.value = maxPage;
 });
 
@@ -815,10 +862,11 @@ async function addAccount(): Promise<void> {
       email: draft.value.email.trim(),
       clientId: draft.value.clientId.trim(),
       refreshToken: draft.value.refreshToken.trim(),
+      authType: draft.value.authType,
       remark: draft.value.remark.trim() || undefined,
     });
     showAdd.value = false;
-    draft.value = { email: "", clientId: "", refreshToken: "", remark: "" };
+    draft.value = { email: "", clientId: "", refreshToken: "", authType: "auto", remark: "" };
     await load();
   } catch (err) {
     error.value = errorMessage(err, "Could not add account");
@@ -838,7 +886,7 @@ async function runImport(): Promise<void> {
   error.value = "";
   importErrors.value = [];
   try {
-    const result = await importAccounts(importText.value, delimiter.value);
+    const result = await importAccounts(importText.value, delimiter.value, importAuthType.value);
     importErrors.value = result.errors;
     flash(t("accounts.importDone", { imported: result.imported, failed: result.failed }));
     if (result.failed === 0) {
@@ -872,6 +920,33 @@ async function exportAccounts(): Promise<void> {
     URL.revokeObjectURL(url);
   } catch (err) {
     error.value = errorMessage(err, "Export failed");
+  }
+}
+
+/**
+ * The toolbar control is a select rather than a pair of buttons because there will be more
+ * than two grants eventually. It resets to its placeholder after applying, so it reads as an
+ * action rather than as the current state of a mixed selection.
+ */
+async function applyBulkAuthType(): Promise<void> {
+  const choice = bulkAuthType.value;
+  bulkAuthType.value = "";
+  if (choice) await markAuthType(choice);
+}
+
+/** Marks every selected account as being on one grant or the other. */
+async function markAuthType(authType: AuthType): Promise<void> {
+  if (!selected.value.size) return;
+  markingAuthType.value = true;
+  error.value = "";
+  try {
+    const result = await setAccountsAuthType([...selected.value], authType);
+    flash(t("accounts.authTypeDone", { n: result.updated, type: t(`accounts.authType.${authType}`) }));
+    await load();
+  } catch (err) {
+    error.value = errorMessage(err, "Could not set auth type");
+  } finally {
+    markingAuthType.value = false;
   }
 }
 

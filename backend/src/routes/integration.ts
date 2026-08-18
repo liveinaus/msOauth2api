@@ -7,7 +7,7 @@
  */
 import { Router } from "express";
 import type { Request, Response } from "express";
-import { getAccountByEmail } from "../db/accounts";
+import { getAccountByEmail, recordRefresh } from "../db/accounts";
 import { getPanelSettings } from "../db/panelSettings";
 import {
   confirmUsage,
@@ -19,6 +19,7 @@ import {
   releaseUsage,
 } from "../db/usages";
 import { requireApiAccess } from "../middleware/auth";
+import { ImapUnavailableError } from "../services/imap";
 import { findCode, parseSince } from "../services/codeSearch";
 import { findForType, rulesFor } from "../services/typeRules";
 import { readFolders } from "../services/mail";
@@ -32,9 +33,26 @@ const router = Router();
 const SEARCH_DEFAULT = 10;
 const SEARCH_MAX = 50;
 
-function sendError(res: Response, error: unknown): void {
+/**
+ * `account` is passed where one is known, so a fault belonging to that mailbox is recorded
+ * against it rather than only logged.
+ */
+function sendError(res: Response, error: unknown, account?: Account): void {
   if (error instanceof OAuthError) {
+    if (account) recordRefresh(account.id, null, error.details.slice(0, 500));
     res.status(error.status).json({ error: "Refresh token failed", details: error.details });
+    return;
+  }
+  if (error instanceof ImapUnavailableError) {
+    // Recorded against the account because it does not clear on a retry: that puts the
+    // reason on the panel's status badge and, more to the point here, takes the address out
+    // of the pool. Without it, get-available-email would keep handing out a mailbox that
+    // cannot be read, and every poll against it would fail the same way.
+    if (account) recordRefresh(account.id, null, `${error.message}: ${error.detail}`.slice(0, 500));
+    console.warn(
+      `[integration] ${account?.email ?? "mailbox"} not available over IMAP: ${error.detail}`,
+    );
+    res.status(502).json({ error: error.message, details: error.detail });
     return;
   }
   const message = error instanceof Error ? error.message : String(error);
@@ -146,7 +164,12 @@ async function handleGetCode(req: Request, res: Response): Promise<void> {
 
   try {
     const result = await readFolders(
-      { email: account.email, clientId: account.clientId, refreshToken: account.refreshToken },
+      {
+        email: account.email,
+        clientId: account.clientId,
+        refreshToken: account.refreshToken,
+        authType: account.authType,
+      },
       ["INBOX", "Junk"],
       parseLimit(params.limit, SEARCH_DEFAULT, SEARCH_MAX),
     );
@@ -182,7 +205,7 @@ async function handleGetCode(req: Request, res: Response): Promise<void> {
       },
     });
   } catch (error) {
-    sendError(res, error);
+    sendError(res, error, account);
   }
 }
 

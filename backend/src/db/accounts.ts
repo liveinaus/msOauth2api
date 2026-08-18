@@ -1,6 +1,6 @@
 import { db } from "./database";
 import { decryptSecret, encryptSecret, encryptionEnabled, isEncrypted } from "./crypto";
-import type { Account } from "../types";
+import { parseAuthType, type Account, type AuthType } from "../types";
 
 type AccountRow = {
   id: number;
@@ -8,6 +8,7 @@ type AccountRow = {
   password: string | null;
   client_id: string;
   refresh_token: string;
+  auth_type: string | null;
   remark: string | null;
   disabled: number;
   last_refresh_at: number | null;
@@ -23,6 +24,7 @@ export type AccountInput = {
   password?: string | null;
   clientId: string;
   refreshToken: string;
+  authType?: AuthType;
   remark?: string | null;
 };
 
@@ -33,6 +35,9 @@ function toAccount(row: AccountRow): Account {
     password: row.password === null ? null : decryptSecret(row.password),
     clientId: row.client_id,
     refreshToken: decryptSecret(row.refresh_token),
+    // An unrecognised value is treated as "auto" rather than failing the read: a row hand-
+    // edited in the database should not take the whole account list down.
+    authType: parseAuthType(row.auth_type) ?? "auto",
     remark: row.remark,
     disabled: row.disabled === 1,
     lastRefreshAt: row.last_refresh_at,
@@ -81,6 +86,7 @@ export function upsertAccount(input: AccountInput): Account {
          password      = @password,
          client_id     = @clientId,
          refresh_token = @refreshToken,
+         auth_type     = COALESCE(@authType, auth_type),
          remark        = COALESCE(@remark, remark),
          updated_at    = @now
        WHERE id = @id`,
@@ -89,6 +95,10 @@ export function upsertAccount(input: AccountInput): Account {
       password: input.password ? encryptSecret(input.password) : null,
       clientId: input.clientId,
       refreshToken: encryptSecret(input.refreshToken),
+      // Like remark: an import that says nothing about the auth type leaves the one already
+      // set alone, so re-importing a plain four-field file cannot silently un-mark an
+      // account as IMAP-only.
+      authType: input.authType ?? null,
       remark: input.remark ?? null,
       now,
     });
@@ -97,12 +107,13 @@ export function upsertAccount(input: AccountInput): Account {
   }
 
   db.prepare(
-    `INSERT INTO accounts (email, password, client_id, refresh_token, remark, created_at, updated_at)
-     VALUES (@email, @password, @clientId, @refreshToken, @remark, @now, @now)
+    `INSERT INTO accounts (email, password, client_id, refresh_token, auth_type, remark, created_at, updated_at)
+     VALUES (@email, @password, @clientId, @refreshToken, COALESCE(@authType, 'auto'), @remark, @now, @now)
      ON CONFLICT(email) DO UPDATE SET
        password      = excluded.password,
        client_id     = excluded.client_id,
        refresh_token = excluded.refresh_token,
+       auth_type     = COALESCE(@authType, accounts.auth_type),
        remark        = COALESCE(excluded.remark, accounts.remark),
        updated_at    = excluded.updated_at`,
   ).run({
@@ -110,6 +121,7 @@ export function upsertAccount(input: AccountInput): Account {
     password: input.password ? encryptSecret(input.password) : null,
     clientId: input.clientId,
     refreshToken: encryptSecret(input.refreshToken),
+    authType: input.authType ?? null,
     remark: input.remark ?? null,
     now,
   });
@@ -131,6 +143,7 @@ export function updateAccount(
        password      = @password,
        client_id     = @clientId,
        refresh_token = @refreshToken,
+       auth_type     = @authType,
        remark        = @remark,
        disabled      = @disabled,
        updated_at    = @now
@@ -138,6 +151,7 @@ export function updateAccount(
   ).run({
     id,
     email: patch.email ?? existing.email,
+    authType: patch.authType ?? existing.authType,
     password: (() => {
       const next = patch.password === undefined ? existing.password : patch.password;
       return next ? encryptSecret(next) : null;
@@ -184,6 +198,21 @@ export function markCopied(id: number): Account | undefined {
 /** Records the arrival of the newest message that landed after the address was copied. */
 export function recordUsage(id: number, usedAt: number): void {
   db.prepare("UPDATE accounts SET last_used_at = ? WHERE id = ?").run(usedAt, id);
+}
+
+/**
+ * Sets the auth type on a set of accounts at once.
+ *
+ * A batch bought or generated together is usually all on the same grant, so marking them
+ * one at a time is the difference between a click and a hundred.
+ */
+export function setAuthType(ids: number[], authType: AuthType): number {
+  if (ids.length === 0) return 0;
+  const placeholders = ids.map(() => "?").join(",");
+  const result = db
+    .prepare(`UPDATE accounts SET auth_type = ?, updated_at = ? WHERE id IN (${placeholders})`)
+    .run(authType, Date.now(), ...ids);
+  return result.changes;
 }
 
 export function deleteAccounts(ids: number[]): number {

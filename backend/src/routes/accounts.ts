@@ -6,6 +6,7 @@ import {
   markCopied,
   recordRefresh,
   recordUsage,
+  setAuthType,
   updateAccount,
   upsertAccount,
 } from "../db/accounts";
@@ -21,11 +22,12 @@ import {
   type Usage,
 } from "../db/usages";
 import { requireAuth } from "../middleware/auth";
+import { ImapUnavailableError } from "../services/imap";
 import { pickForPanel, readFolders } from "../services/mail";
-import { exchangeRefreshToken, OAuthError } from "../services/oauth";
+import { exchangeRefreshToken, OAuthError, refreshScopeFor } from "../services/oauth";
 import { findForType, rulesFor } from "../services/typeRules";
 import { noteUsage } from "../services/usage";
-import type { Account } from "../types";
+import { AUTH_TYPES, parseAuthType, type Account } from "../types";
 
 const router = Router();
 
@@ -59,6 +61,7 @@ function toPublic(account: Account, usages: Usage[] = listUsages(account.id)) {
     id: account.id,
     email: account.email,
     clientId: account.clientId,
+    authType: account.authType,
     hasPassword: Boolean(account.password),
     tokenHint: `${account.refreshToken.slice(0, 6)}…${account.refreshToken.slice(-4)}`,
     remark: account.remark,
@@ -79,7 +82,7 @@ router.get("/", (_req, res) => {
 });
 
 router.post("/", (req, res) => {
-  const { email, password, clientId, refreshToken, remark } = req.body ?? {};
+  const { email, password, clientId, refreshToken, authType, remark } = req.body ?? {};
   if (typeof email !== "string" || !email.trim()) {
     res.status(400).json({ error: "email is required" });
     return;
@@ -93,11 +96,18 @@ router.post("/", (req, res) => {
     return;
   }
 
+  if (authType !== undefined && parseAuthType(authType) === null) {
+    res.status(400).json({ error: `authType must be one of: ${AUTH_TYPES.join(", ")}` });
+    return;
+  }
+
   const account = upsertAccount({
     email: email.trim(),
     password: typeof password === "string" ? password : null,
     clientId: clientId.trim(),
     refreshToken: refreshToken.trim(),
+    // A new account with nothing said defaults to "auto" in the database.
+    authType: parseAuthType(authType) ?? undefined,
     remark: typeof remark === "string" ? remark : null,
   });
   res.status(201).json(toPublic(account));
@@ -109,14 +119,24 @@ router.post("/", (req, res) => {
  * Upstream parsed a delimited file in the browser and appended every line blindly, so a
  * re-import silently doubled the list. Parsing here means one code path, real validation
  * and a per-line report of what was rejected.
+ *
+ * The auth type can come from either end: a body-level `authType` applies to the whole
+ * file, which is how a batch of IMAP-only accounts gets marked in one go, and an optional
+ * fifth field on a line overrides it for that account. With neither, an existing account
+ * keeps the type it already has and a new one starts on "auto".
  */
 router.post("/import", (req, res) => {
-  const { content, delimiter } = req.body ?? {};
+  const { content, delimiter, authType } = req.body ?? {};
   if (typeof content !== "string" || !content.trim()) {
     res.status(400).json({ error: "content is required" });
     return;
   }
+  if (authType !== undefined && parseAuthType(authType) === null) {
+    res.status(400).json({ error: `authType must be one of: ${AUTH_TYPES.join(", ")}` });
+    return;
+  }
   const sep = typeof delimiter === "string" && delimiter ? delimiter : "----";
+  const fileAuthType = parseAuthType(authType) ?? undefined;
 
   const errors: { line: number; reason: string }[] = [];
   let imported = 0;
@@ -131,7 +151,7 @@ router.post("/import", (req, res) => {
       return;
     }
 
-    const [email, password, clientId, refreshToken] = fields;
+    const [email, password, clientId, refreshToken, lineAuthType] = fields;
     if (!email || !clientId || !refreshToken) {
       errors.push({
         line: index + 1,
@@ -139,20 +159,39 @@ router.post("/import", (req, res) => {
       });
       return;
     }
+    if (lineAuthType && parseAuthType(lineAuthType) === null) {
+      errors.push({
+        line: index + 1,
+        reason: `field 5 must be one of: ${AUTH_TYPES.join(", ")}`,
+      });
+      return;
+    }
 
-    upsertAccount({ email, password: password || null, clientId, refreshToken });
+    upsertAccount({
+      email,
+      password: password || null,
+      clientId,
+      refreshToken,
+      authType: parseAuthType(lineAuthType) ?? fileAuthType,
+    });
     imported++;
   });
 
   res.json({ imported, failed: errors.length, errors: errors.slice(0, 50) });
 });
 
-/** Export in the same delimited format the importer accepts, for backup or migration. */
+/**
+ * Export in the same delimited format the importer accepts, for backup or migration.
+ *
+ * The auth type is written as a fifth field so an export round-trips: without it, restoring
+ * a backup would put every IMAP-only account back on the Graph-first path. The importer
+ * still takes four-field lines, so older files keep working.
+ */
 router.get("/export", (req, res) => {
   const sep =
     typeof req.query.delimiter === "string" && req.query.delimiter ? req.query.delimiter : "----";
   const body = listAccounts()
-    .map((a) => [a.email, a.password ?? "", a.clientId, a.refreshToken].join(sep))
+    .map((a) => [a.email, a.password ?? "", a.clientId, a.refreshToken, a.authType].join(sep))
     .join("\n");
 
   res.type("text/plain").attachment("accounts.txt").send(body);
@@ -160,7 +199,12 @@ router.get("/export", (req, res) => {
 
 router.patch("/:id", (req, res) => {
   const id = Number(req.params.id);
-  const { email, password, clientId, refreshToken, remark, disabled } = req.body ?? {};
+  const { email, password, clientId, refreshToken, authType, remark, disabled } = req.body ?? {};
+
+  if (authType !== undefined && parseAuthType(authType) === null) {
+    res.status(400).json({ error: `authType must be one of: ${AUTH_TYPES.join(", ")}` });
+    return;
+  }
 
   const updated = updateAccount(id, {
     email: typeof email === "string" ? email.trim() : undefined,
@@ -168,6 +212,7 @@ router.patch("/:id", (req, res) => {
     clientId: typeof clientId === "string" ? clientId.trim() : undefined,
     refreshToken:
       typeof refreshToken === "string" && refreshToken.trim() ? refreshToken.trim() : undefined,
+    authType: parseAuthType(authType) ?? undefined,
     remark: typeof remark === "string" ? remark : undefined,
     disabled: typeof disabled === "boolean" ? disabled : undefined,
   });
@@ -271,7 +316,12 @@ router.get("/:id/latest-mail", async (req, res) => {
     // most recently. A few messages are fetched rather than one, since the mail being
     // waited on is not always on top.
     const result = await readFolders(
-      { email: account.email, clientId: account.clientId, refreshToken: account.refreshToken },
+      {
+        email: account.email,
+        clientId: account.clientId,
+        refreshToken: account.refreshToken,
+        authType: account.authType,
+      },
       ["INBOX", "Junk"],
       type ? 5 : 1,
     );
@@ -308,10 +358,41 @@ router.get("/:id/latest-mail", async (req, res) => {
       res.status(error.status).json({ error: "Refresh token failed", details: error.details });
       return;
     }
+    if (error instanceof ImapUnavailableError) {
+      // Recorded like a refresh failure because it has the same consequence: this mailbox
+      // cannot be read. That puts a reason on the status badge and takes the address out of
+      // the pool, instead of leaving every poll and every handout to fail the same way.
+      recordRefresh(id, null, `${error.message}: ${error.detail}`.slice(0, 500));
+      console.warn(`[accounts:latest-mail] ${account.email}: ${error.detail}`);
+      res.status(502).json({
+        error: error.message,
+        details: error.detail,
+        // Non-null: read at the top of this handler.
+        account: toPublic(getAccount(id)!),
+      });
+      return;
+    }
     const message = error instanceof Error ? error.message : String(error);
     console.error("[accounts:latest-mail]", error);
     res.status(500).json({ error: message });
   }
+});
+
+/** Marks a set of accounts as being on one grant or the other. */
+router.post("/auth-type", (req, res) => {
+  const { ids, authType } = req.body ?? {};
+  if (!Array.isArray(ids) || ids.some((id) => typeof id !== "number")) {
+    res.status(400).json({ error: "ids must be an array of numbers" });
+    return;
+  }
+
+  const parsed = parseAuthType(authType);
+  if (!parsed) {
+    res.status(400).json({ error: `authType must be one of: ${AUTH_TYPES.join(", ")}` });
+    return;
+  }
+
+  res.json({ updated: setAuthType(ids as number[], parsed) });
 });
 
 router.post("/delete", (req, res) => {
@@ -330,6 +411,10 @@ router.post("/delete", (req, res) => {
  * upstream's browser-side loop fired one request per account with no bound, so a panel with
  * a hundred accounts mostly got rate-limited answers. Failures are recorded per account
  * rather than aborting the run.
+ *
+ * Each account is refreshed on the scope its own auth type needs: refreshing an IMAP-only
+ * account on the default grant would store a replacement token that the next mail read
+ * cannot authenticate with.
  */
 router.post("/refresh", async (req, res) => {
   const { ids } = req.body ?? {};
@@ -346,7 +431,11 @@ router.post("/refresh", async (req, res) => {
     await Promise.all(
       batch.map(async (account) => {
         try {
-          const token = await exchangeRefreshToken(account.refreshToken, account.clientId);
+          const token = await exchangeRefreshToken(
+            account.refreshToken,
+            account.clientId,
+            refreshScopeFor(account.authType),
+          );
           recordRefresh(account.id, token.refreshToken, null);
           results.push({ id: account.id, email: account.email, ok: true });
         } catch (error) {

@@ -63,11 +63,18 @@ export type AccountUsageView = {
   code: string | null;
 };
 
+/**
+ * "auto" probes Graph and falls back to IMAP; "imap" is for accounts whose consent only
+ * ever covered the older Outlook IMAP permission, which have to ask for that scope by name.
+ */
+export type AuthType = "auto" | "imap";
+
 export type AccountView = {
   id: number;
   usages: AccountUsageView[];
   email: string;
   clientId: string;
+  authType: AuthType;
   hasPassword: boolean;
   tokenHint: string;
   remark: string | null;
@@ -89,6 +96,8 @@ export type MailMessage = {
   code?: string;
   /** Set only by the panel's latest-mail call, which reads more than one folder. */
   mailbox?: Mailbox;
+  /** Transport handle: a Graph message id or an IMAP UID. Needed to delete this message. */
+  id?: string;
 };
 
 export type ApiKeyView = {
@@ -173,6 +182,7 @@ export async function createAccount(input: {
   password?: string;
   clientId: string;
   refreshToken: string;
+  authType?: AuthType;
   remark?: string;
 }) {
   const { data } = await api.post<AccountView>("/accounts", input);
@@ -187,12 +197,18 @@ export async function updateAccount(
   return data;
 }
 
-export async function importAccounts(content: string, delimiter: string) {
+/** `authType` applies to the whole file; a fifth field on a line overrides it. */
+export async function importAccounts(content: string, delimiter: string, authType?: AuthType) {
   const { data } = await api.post<{
     imported: number;
     failed: number;
     errors: { line: number; reason: string }[];
-  }>("/accounts/import", { content, delimiter });
+  }>("/accounts/import", { content, delimiter, authType });
+  return data;
+}
+
+export async function setAccountsAuthType(ids: number[], authType: AuthType) {
+  const { data } = await api.post<{ updated: number }>("/accounts/auth-type", { ids, authType });
   return data;
 }
 
@@ -244,6 +260,16 @@ export async function fetchMail(email: string, mailbox: Mailbox, limit = 100) {
     params: { email, mailbox, limit, shape: "array" },
   });
   return Array.isArray(data) ? data : [];
+}
+
+/** Deletes one message. `id` is the value that came back with it on the read. */
+export async function deleteMailMessage(email: string, mailbox: Mailbox, id: string) {
+  const { data } = await api.post<{ message: string; deleted: boolean }>("/delete-mail", {
+    email,
+    mailbox,
+    id,
+  });
+  return data;
 }
 
 export async function purgeMailbox(email: string, mailbox: Mailbox) {
@@ -317,6 +343,50 @@ export async function fetchPanelSettings() {
 
 export async function savePanelSettings(patch: Partial<PanelSettings>) {
   const { data } = await api.put<PanelSettings>("/settings", patch);
+  return data;
+}
+
+/** "merge" adds to what is here; "replace" empties the tables the backup covers first. */
+export type BackupMode = "merge" | "replace";
+
+export type BackupImportReport = {
+  mode: BackupMode;
+  settings: number;
+  accounts: number;
+  usages: number;
+  usageTypes: number;
+  apiKeys: number;
+  panel: boolean;
+  admin: boolean;
+  removed: { accounts: number; usageTypes: number; apiKeys: number };
+  skipped: { where: string; reason: string }[];
+};
+
+/**
+ * The whole panel as a JSON file: accounts with their metadata and usage history, type
+ * configuration, panel settings, API keys and the admin login.
+ *
+ * Fetched through the authenticated client rather than by pointing the browser at the URL,
+ * for the same reason as the accounts export: the session token is attached by an
+ * interceptor, so a plain link would arrive with no credential.
+ */
+export async function fetchBackupFile(options: { passphrase?: string }) {
+  const passphrase = options.passphrase?.trim();
+  const { data } = await api.post(
+    "/backup/export",
+    // Without a passphrase the server wants the choice stated outright, so an unencrypted
+    // file of every refresh token cannot be produced by accident.
+    passphrase ? { passphrase } : { unprotected: true },
+    { responseType: "blob" },
+  );
+  return data as Blob;
+}
+
+export async function importBackupFile(
+  backup: unknown,
+  options: { mode: BackupMode; includeAdmin: boolean; passphrase?: string },
+) {
+  const { data } = await api.post<BackupImportReport>("/backup/import", { backup, ...options });
   return data;
 }
 

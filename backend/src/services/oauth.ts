@@ -1,7 +1,23 @@
-import type { TokenSet } from "../types";
+import type { AuthType, TokenSet } from "../types";
 
 const TOKEN_ENDPOINT = "https://login.microsoftonline.com/consumers/oauth2/v2.0/token";
 const GRAPH_MAIL_READ = "https://graph.microsoft.com/Mail.Read";
+
+/**
+ * Scopes for accounts on the older IMAP permission, one per transport.
+ *
+ * Their consent never covered Graph, so the default grant comes back without anything that
+ * will authenticate a Graph call -- the permission has to be asked for by name.
+ * `offline_access` is what keeps a refresh token coming back, without which the account
+ * would work once and then go stale.
+ *
+ * Reading and sending are asked for separately because they are separate consented
+ * permissions: a token scoped for IMAP does not authenticate an SMTP session (Outlook
+ * answers 535), so send fetches its own SMTP.Send token. The refresh token is not scope-
+ * locked, so the one stored against the account redeems for either.
+ */
+const IMAP_SCOPE = "https://outlook.office.com/IMAP.AccessAsUser.All offline_access";
+const SMTP_SCOPE = "https://outlook.office.com/SMTP.Send offline_access";
 
 /** Thrown when Microsoft rejects the refresh token, carrying its status for the response. */
 export class OAuthError extends Error {
@@ -65,6 +81,22 @@ export async function exchangeRefreshToken(
   };
 }
 
+/**
+ * Token-endpoint error codes that mean "this account was never consented to Graph", as
+ * opposed to a dead token. An account with no Graph permission at all has its `.default`
+ * request rejected outright rather than answered with a Graph-less scope list, so the probe
+ * throws where it would otherwise have reported `available: false`. Treating these as
+ * "Graph unavailable" lets such an account fall through to IMAP instead of erroring.
+ */
+const GRAPH_CONSENT_ERROR_CODES = ["AADSTS90023", "AADSTS65001", "AADSTS70011"];
+
+export function isGraphConsentFailure(error: unknown): boolean {
+  return (
+    error instanceof OAuthError &&
+    GRAPH_CONSENT_ERROR_CODES.some((code) => error.details.includes(code))
+  );
+}
+
 export type GraphProbe = { available: boolean; accessToken: string; refreshToken: string | null };
 
 /**
@@ -95,4 +127,29 @@ export async function getMailAccessToken(
   clientId: string,
 ): Promise<TokenSet> {
   return exchangeRefreshToken(refreshToken, clientId);
+}
+
+/** Read access token for an account whose consent only covers the older IMAP permission. */
+export async function getImapAccessToken(
+  refreshToken: string,
+  clientId: string,
+): Promise<TokenSet> {
+  return exchangeRefreshToken(refreshToken, clientId, IMAP_SCOPE);
+}
+
+/** Send access token for such an account: SMTP.Send, which the IMAP grant does not carry. */
+export async function getSmtpAccessToken(
+  refreshToken: string,
+  clientId: string,
+): Promise<TokenSet> {
+  return exchangeRefreshToken(refreshToken, clientId, SMTP_SCOPE);
+}
+
+/**
+ * The scope a plain token refresh should ask for, so the reply carries a replacement the
+ * account can actually use next time. An "imap" account refreshed on the default grant
+ * would get a token back, but not one its next mail read could authenticate with.
+ */
+export function refreshScopeFor(authType: AuthType): string | undefined {
+  return authType === "imap" ? IMAP_SCOPE : undefined;
 }

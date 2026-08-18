@@ -2,8 +2,15 @@ import { Router } from "express";
 import type { Request, Response } from "express";
 import { getAccountByEmail, recordRefresh } from "../db/accounts";
 import { requireApiAccess, requireSendAccess } from "../middleware/auth";
-import { exchangeRefreshToken, getMailAccessToken, OAuthError } from "../services/oauth";
-import { purgeMail, readMail } from "../services/mail";
+import {
+  exchangeRefreshToken,
+  getMailAccessToken,
+  getSmtpAccessToken,
+  OAuthError,
+  refreshScopeFor,
+} from "../services/oauth";
+import { ImapUnavailableError } from "../services/imap";
+import { deleteMessage, purgeMail, readMail } from "../services/mail";
 import { sendMail } from "../services/smtp";
 import { noteUsage } from "../services/usage";
 import type { Mailbox, MailMessage } from "../types";
@@ -34,9 +41,19 @@ function sendError(res: Response, error: unknown): void {
     return;
   }
   if (error instanceof OAuthError) {
-    // Pass Microsoft's own status through: a 400 here almost always means the refresh
-    // token has expired, which the caller needs to tell apart from a server fault.
-    res.status(error.status).json({ error: "Refresh token failed", details: error.details });
+    // Microsoft's 401/403 means it rejected the refresh token, not that the panel session
+    // lapsed. Passing those through as-is makes the SPA's interceptor treat an upstream auth
+    // failure as its own and log the user out, so remap them to 502. Other statuses (e.g. a
+    // 400 for an expired token) still pass through for the caller to tell apart.
+    const status = error.status === 401 || error.status === 403 ? 502 : error.status;
+    res.status(status).json({ error: "Refresh token failed", details: error.details });
+    return;
+  }
+  if (error instanceof ImapUnavailableError) {
+    // Nothing is wrong on this side, so this is neither a 500 nor worth a stack trace on
+    // every poll. 502 says an upstream refused, which is what happened.
+    console.warn(`[mail] mailbox not available over IMAP: ${error.detail}`);
+    res.status(502).json({ error: error.message, details: error.detail });
     return;
   }
   const message = error instanceof Error ? error.message : String(error);
@@ -163,7 +180,11 @@ async function handleRefreshToken(req: Request, res: Response): Promise<void> {
     // Upstream took only refresh_token and client_id here, with no address at all.
     const credentials = resolveCredentials(params, { requireEmail: false });
 
-    const token = await exchangeRefreshToken(credentials.refreshToken, credentials.clientId);
+    const token = await exchangeRefreshToken(
+      credentials.refreshToken,
+      credentials.clientId,
+      refreshScopeFor(credentials.authType ?? "auto"),
+    );
     persistRotation(credentials.email, token.refreshToken);
 
     // Upstream echoed the supplied token when the response carried no replacement, so a
@@ -178,6 +199,45 @@ async function handleRefreshToken(req: Request, res: Response): Promise<void> {
     sendError(res, error);
   }
 }
+
+/**
+ * Deletes one message.
+ *
+ * POST only, unlike its neighbours: the GET forms exist for upstream compatibility, and
+ * nothing upstream ever deleted a single message, so there is no contract to keep. A
+ * destructive action reachable by GET is one prefetch or crawler away from firing on its
+ * own.
+ *
+ * `id` is whatever the read returned for that message: a Graph id, or an IMAP UID.
+ */
+router.post("/delete-mail", requireApiAccess, async (req, res) => {
+  try {
+    const params = readParams(req);
+    const mailbox = parseMailbox(params.mailbox);
+    if (!mailbox) {
+      res.status(400).json({ error: "Invalid mailbox. Allowed: INBOX, Junk" });
+      return;
+    }
+
+    const id = params.id?.trim();
+    if (!id) {
+      res.status(400).json({ error: "id is required" });
+      return;
+    }
+
+    const credentials = resolveCredentials(params);
+    const result = await deleteMessage(credentials, mailbox, id);
+    persistRotation(credentials.email, result.rotatedRefreshToken);
+
+    res.status(200).json({
+      message: result.deleted ? "Message deleted." : "No message matched that id.",
+      deleted: result.deleted,
+      transport: result.transport,
+    });
+  } catch (error) {
+    sendError(res, error);
+  }
+});
 
 function purgeHandler(mailbox: Mailbox) {
   return async (req: Request, res: Response): Promise<void> => {
@@ -217,7 +277,13 @@ async function handleSendMail(req: Request, res: Response): Promise<void> {
     }
 
     const credentials = resolveCredentials(params);
-    const token = await getMailAccessToken(credentials.refreshToken, credentials.clientId);
+    // An IMAP-only account sends on an SMTP.Send-scoped token: its read grant
+    // (IMAP.AccessAsUser.All) does not authenticate SMTP. An "auto" account keeps the
+    // default no-scope grant, which already carries SMTP.Send.
+    const token =
+      credentials.authType === "imap"
+        ? await getSmtpAccessToken(credentials.refreshToken, credentials.clientId)
+        : await getMailAccessToken(credentials.refreshToken, credentials.clientId);
     persistRotation(credentials.email, token.refreshToken);
 
     const info = await sendMail({

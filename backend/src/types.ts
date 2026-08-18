@@ -1,5 +1,22 @@
 /** Shared shapes. Types rather than interfaces throughout, per project convention. */
 
+/**
+ * How an account's refresh token has to be spent.
+ *
+ * "auto" is the original behaviour: ask for a Graph token, and fall back to IMAP when the
+ * registration was never granted Mail.Read. "imap" is for tokens consented only to the
+ * older IMAP permission -- those must ask for the Outlook IMAP scope by name, and probing
+ * Graph for them wastes a round trip that can only ever fail.
+ */
+export type AuthType = "auto" | "imap";
+
+export const AUTH_TYPES: AuthType[] = ["auto", "imap"];
+
+export function parseAuthType(value: unknown): AuthType | null {
+  const normalised = typeof value === "string" ? value.trim().toLowerCase() : "";
+  return AUTH_TYPES.includes(normalised as AuthType) ? (normalised as AuthType) : null;
+}
+
 /** A stored mail account. Secrets are decrypted by the time a caller sees this. */
 export type Account = {
   id: number;
@@ -7,6 +24,7 @@ export type Account = {
   password: string | null;
   clientId: string;
   refreshToken: string;
+  authType: AuthType;
   remark: string | null;
   disabled: boolean;
   lastRefreshAt: number | null;
@@ -34,6 +52,11 @@ export type MailMessage = {
   html: string;
   date: string;
   code?: string;
+  /**
+   * Transport identifier: a Graph message id, or an IMAP UID as a string. Additive, like
+   * `code`, and the handle a caller needs to delete one message rather than a whole folder.
+   */
+  id?: string;
 };
 
 /** Which transport served a request, for logging and the UI's account badges. */
