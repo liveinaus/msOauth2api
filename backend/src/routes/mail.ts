@@ -9,7 +9,7 @@ import {
   OAuthError,
   refreshScopeFor,
 } from "../services/oauth";
-import { ImapUnavailableError } from "../services/imap";
+import { ImapTemporaryError, ImapUnavailableError } from "../services/imap";
 import { deleteMessage, purgeMail, readMail } from "../services/mail";
 import { sendMail } from "../services/smtp";
 import { noteUsage } from "../services/usage";
@@ -54,6 +54,13 @@ function sendError(res: Response, error: unknown): void {
     // every poll. 502 says an upstream refused, which is what happened.
     console.warn(`[mail] mailbox not available over IMAP: ${error.detail}`);
     res.status(502).json({ error: error.message, details: error.detail });
+    return;
+  }
+  if (error instanceof ImapTemporaryError) {
+    // 503 rather than 502: the mailbox is fine, it was slow, and the same request is worth
+    // making again. Retry-After keeps a well-behaved client from hammering it meanwhile.
+    console.warn(`[mail] mailbox slow to answer: ${error.detail}`);
+    res.status(503).set("Retry-After", "5").json({ error: error.message, details: error.detail });
     return;
   }
   const message = error instanceof Error ? error.message : String(error);

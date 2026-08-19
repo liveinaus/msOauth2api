@@ -58,6 +58,7 @@ Every variable is documented in [env.example](env.example). The essentials:
 | `SEND_PASSWORD`                                       | no          | Upstream's separate secret for `/api/send-mail`.                                                              |
 | `AI_API_KEY` / `AI_API_URL` / `AI_MODEL`              | no          | Enables AI summarisation.                                                                                     |
 | `PORT`, `DB_PATH`, `TZ`, `TRUST_PROXY`, `CORS_ORIGIN` | no          | Server tuning. Set `TRUST_PROXY=1` behind a reverse proxy so login rate limiting sees real client IPs.        |
+| `IMAP_TIMEOUT_MS` and friends                         | no          | Mail fetch timeouts and retries. Defaults suit a normal connection; see [Slow mailboxes](#slow-mailboxes).    |
 
 ## Authentication
 
@@ -231,6 +232,27 @@ Upstream's `mail-new` answered with an **array of one** on the Graph path but a 
 object** on the IMAP path. Both are reproduced exactly, by transport, so clients written
 against either keep working. Pass `shape=array` or `shape=object` to stop depending on which
 transport served the request.
+
+### Slow mailboxes
+
+Outlook is regularly slow rather than broken, so a read that stumbles is retried before it
+is called a failure. The whole read, retries included, runs under one budget
+(`IMAP_TIMEOUT_MS`, default 45s, `IMAP_ATTEMPTS` goes inside it), and Graph and token calls
+have their own (`MAIL_HTTP_TIMEOUT_MS`, default 30s). Each phase can be tuned separately;
+see [env.example](env.example).
+
+Two outcomes are kept apart, because only one of them is the account's fault:
+
+- **The mailbox will not serve IMAP** -- Outlook says so in as many words, it does not clear
+  on a retry, so it answers `502`, is recorded against the account, and takes the address
+  out of the pool.
+- **The mailbox was merely slow** -- nothing is recorded, the address stays in the pool, and
+  `get-code` answers `200` with `status: "pending"` and a `warning` naming the reason, since
+  a poller should ask again rather than send someone to read the code by hand. The other
+  mail endpoints answer `503` with `Retry-After`.
+
+Reading the inbox and the junk folder is likewise not all-or-nothing: if one folder answers
+and the other does not, the messages that were found are still returned.
 
 ## Backup and migration
 

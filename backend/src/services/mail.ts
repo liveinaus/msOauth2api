@@ -112,6 +112,11 @@ export type FoldersResult = {
  * OAuth round trip each time, which on a poll running every twenty seconds is the bulk of
  * the work. Folders are read one after another rather than at once because the IMAP path
  * opens a connection per call, and Microsoft throttles an account that fans out.
+ *
+ * A folder that fails does not sink the call as long as another one answered. The point of
+ * reading both is to find one code, and losing the inbox's copy of it because the junk
+ * folder timed out is the worst of both: the code was there and the caller was told nothing
+ * was. Only every folder failing is an error.
  */
 export async function readFolders(
   credentials: MailCredentials,
@@ -120,14 +125,25 @@ export async function readFolders(
 ): Promise<FoldersResult> {
   const transport = await openTransport(credentials);
   const messages: FolderMessage[] = [];
+  let read = 0;
+  let failure: unknown;
 
   for (const mailbox of mailboxes) {
-    const found =
-      transport.kind === "graph"
-        ? await graph.listMessages(transport.accessToken, mailbox, limit)
-        : await imap.fetchMessages(credentials.email, transport.accessToken, mailbox, limit);
-    messages.push(...found.map((message) => ({ ...message, mailbox })));
+    try {
+      const found =
+        transport.kind === "graph"
+          ? await graph.listMessages(transport.accessToken, mailbox, limit)
+          : await imap.fetchMessages(credentials.email, transport.accessToken, mailbox, limit);
+      messages.push(...found.map((message) => ({ ...message, mailbox })));
+      read++;
+    } catch (error) {
+      failure ??= error;
+      const detail = error instanceof Error ? error.message : String(error);
+      console.warn(`[mail] ${credentials.email}: could not read ${mailbox}: ${detail}`);
+    }
   }
+
+  if (!read && failure) throw failure;
 
   return {
     messages: sortByDate(messages),

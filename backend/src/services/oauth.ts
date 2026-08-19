@@ -1,4 +1,5 @@
 import type { AuthType, TokenSet } from "../types";
+import { fetchWithTimeout } from "./http";
 
 const TOKEN_ENDPOINT = "https://login.microsoftonline.com/consumers/oauth2/v2.0/token";
 const GRAPH_MAIL_READ = "https://graph.microsoft.com/Mail.Read";
@@ -52,11 +53,15 @@ export async function exchangeRefreshToken(
   });
   if (scope) body.set("scope", scope);
 
-  const response = await fetch(TOKEN_ENDPOINT, {
-    method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body: body.toString(),
-  });
+  const response = await fetchWithTimeout(
+    TOKEN_ENDPOINT,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: body.toString(),
+    },
+    "Microsoft token endpoint",
+  );
 
   const raw = await response.text();
   if (!response.ok) throw new OAuthError(response.status, raw);

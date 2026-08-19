@@ -431,3 +431,34 @@ describe("a mailbox that will not serve IMAP", () => {
     expect(offered).not.toContain(account.email);
   });
 });
+
+describe("a mailbox that was only slow", () => {
+  it("stays pending and keeps its place in the pool, so the poller carries on", async () => {
+    const { ImapTemporaryError } = await import("../services/imap");
+    const account = upsertAccount({
+      email: "slow@x.com",
+      password: null,
+      clientId: "c",
+      refreshToken: "t",
+    });
+
+    const before = await call("/api/pool-status?type=SlowPool");
+
+    readFailure = new ImapTemporaryError("no response within 45s");
+    const { status, body } = await call("/api/get-code?email=slow@x.com&type=Slow");
+    readFailure = null;
+
+    // "Pending" rather than an error: to a poller a slow mailbox and a mailbox with no code
+    // in it yet call for the same thing, which is to ask again. The warning keeps the reason
+    // visible to anyone reading the response.
+    expect(status).toBe(200);
+    expect(body).toMatchObject({ status: "pending", warning: "no response within 45s" });
+
+    // Nothing recorded against the account, and the pool is exactly as big as it was: a
+    // mailbox that was merely slow must not be written off the way an IMAP-less one is.
+    expect(getAccountByEmail("slow@x.com")!.lastRefreshError).toBeNull();
+    expect(account.email).toBe("slow@x.com");
+    const after = await call("/api/pool-status?type=SlowPool");
+    expect(after.body.available).toBe(before.body.available);
+  });
+});

@@ -22,7 +22,7 @@ import {
   type Usage,
 } from "../db/usages";
 import { requireAuth } from "../middleware/auth";
-import { ImapUnavailableError } from "../services/imap";
+import { ImapTemporaryError, ImapUnavailableError } from "../services/imap";
 import { pickForPanel, readFolders } from "../services/mail";
 import { exchangeRefreshToken, OAuthError, refreshScopeFor } from "../services/oauth";
 import { findForType, rulesFor } from "../services/typeRules";
@@ -370,6 +370,22 @@ router.get("/:id/latest-mail", async (req, res) => {
         // Non-null: read at the top of this handler.
         account: toPublic(getAccount(id)!),
       });
+      return;
+    }
+    if (error instanceof ImapTemporaryError) {
+      // Nothing recorded: the mailbox was reachable and only slow, and marking it would
+      // take a working address out of the pool over a bad minute. 503 tells the panel poll
+      // to keep going rather than treating this as a dead account.
+      console.warn(`[accounts:latest-mail] ${account.email} slow to answer: ${error.detail}`);
+      res
+        .status(503)
+        .set("Retry-After", "5")
+        .json({
+          error: error.message,
+          details: error.detail,
+          // Non-null: read at the top of this handler.
+          account: toPublic(getAccount(id)!),
+        });
       return;
     }
     const message = error instanceof Error ? error.message : String(error);

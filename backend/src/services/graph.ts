@@ -1,5 +1,6 @@
 import type { Mailbox, MailMessage } from "../types";
 import { extractCode } from "./codes";
+import { fetchWithTimeout } from "./http";
 
 const GRAPH_BASE = "https://graph.microsoft.com/v1.0";
 
@@ -37,14 +38,18 @@ function toMailMessage(item: GraphMessage): MailMessage {
 }
 
 async function graphRequest(path: string, accessToken: string, init?: RequestInit) {
-  const response = await fetch(`${GRAPH_BASE}${path}`, {
-    ...init,
-    headers: {
-      Authorization: `Bearer ${accessToken}`,
-      "Content-Type": "application/json",
-      ...(init?.headers ?? {}),
+  const response = await fetchWithTimeout(
+    `${GRAPH_BASE}${path}`,
+    {
+      ...init,
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+        ...(init?.headers ?? {}),
+      },
     },
-  });
+    "Graph API",
+  );
 
   if (!response.ok) {
     const detail = await response.text();

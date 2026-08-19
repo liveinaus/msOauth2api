@@ -19,7 +19,7 @@ import {
   releaseUsage,
 } from "../db/usages";
 import { requireApiAccess } from "../middleware/auth";
-import { ImapUnavailableError } from "../services/imap";
+import { ImapTemporaryError, ImapUnavailableError } from "../services/imap";
 import { findCode, parseSince } from "../services/codeSearch";
 import { findForType, rulesFor } from "../services/typeRules";
 import { readFolders } from "../services/mail";
@@ -53,6 +53,13 @@ function sendError(res: Response, error: unknown, account?: Account): void {
       `[integration] ${account?.email ?? "mailbox"} not available over IMAP: ${error.detail}`,
     );
     res.status(502).json({ error: error.message, details: error.detail });
+    return;
+  }
+  if (error instanceof ImapTemporaryError) {
+    // Deliberately not recorded against the account: the mailbox was reachable and merely
+    // slow, so writing it off here would take a working address out of the pool.
+    console.warn(`[integration] ${account?.email ?? "mailbox"} slow to answer: ${error.detail}`);
+    res.status(503).set("Retry-After", "5").json({ error: error.message, details: error.detail });
     return;
   }
   const message = error instanceof Error ? error.message : String(error);
@@ -205,6 +212,21 @@ async function handleGetCode(req: Request, res: Response): Promise<void> {
       },
     });
   } catch (error) {
+    // A slow mailbox looks the same to a poller as a mailbox with no code in it yet, and it
+    // is the same thing to do about it: ask again. Answering "pending" rather than an error
+    // keeps the caller's poll running instead of sending someone to read the code by hand;
+    // `warning` is there so the reason is still visible when one is being debugged.
+    if (error instanceof ImapTemporaryError) {
+      console.warn(`[integration] ${account.email} slow to answer: ${error.detail}`);
+      res.json({
+        status: "pending",
+        email: account.email,
+        type: type ?? null,
+        query,
+        warning: error.detail,
+      });
+      return;
+    }
     sendError(res, error, account);
   }
 }
