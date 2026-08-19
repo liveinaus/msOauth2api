@@ -4,6 +4,7 @@ import {
   getAccount,
   listAccounts,
   markCopied,
+  clearRefreshError,
   recordRefresh,
   recordUsage,
   setAuthType,
@@ -23,8 +24,14 @@ import {
 } from "../db/usages";
 import { requireAuth } from "../middleware/auth";
 import { ImapTemporaryError, ImapUnavailableError } from "../services/imap";
+import { forgetAccount, noteAccountFailure, noteAccountSuccess } from "../services/accountHealth";
 import { pickForPanel, readFolders } from "../services/mail";
-import { exchangeRefreshToken, OAuthError, refreshScopeFor } from "../services/oauth";
+import {
+  exchangeRefreshToken,
+  isGrantFailure,
+  OAuthError,
+  refreshScopeFor,
+} from "../services/oauth";
 import { findForType, rulesFor } from "../services/typeRules";
 import { noteUsage } from "../services/usage";
 import { AUTH_TYPES, parseAuthType, type Account } from "../types";
@@ -326,6 +333,10 @@ router.get("/:id/latest-mail", async (req, res) => {
       type ? 5 : 1,
     );
     if (result.rotatedRefreshToken) recordRefresh(id, result.rotatedRefreshToken, null);
+    // The mailbox answered, which is better proof that the account works than a token
+    // refresh is: any fault left over from a bad minute goes now, badge and all.
+    noteAccountSuccess(id);
+    clearRefreshError(id);
     noteUsage(account.email, result.messages);
 
     if (type) {
@@ -354,7 +365,12 @@ router.get("/:id/latest-mail", async (req, res) => {
     });
   } catch (error) {
     if (error instanceof OAuthError) {
-      recordRefresh(id, null, error.details.slice(0, 500));
+      // Only a rejected grant is the account's fault, and only once it has repeated. A
+      // throttled or unwell token endpoint is neither, so it fails the request and nothing
+      // more.
+      if (isGrantFailure(error) && noteAccountFailure(id)) {
+        recordRefresh(id, null, error.details.slice(0, 500));
+      }
       res.status(error.status).json({ error: "Refresh token failed", details: error.details });
       return;
     }
@@ -362,7 +378,11 @@ router.get("/:id/latest-mail", async (req, res) => {
       // Recorded like a refresh failure because it has the same consequence: this mailbox
       // cannot be read. That puts a reason on the status badge and takes the address out of
       // the pool, instead of leaving every poll and every handout to fail the same way.
-      recordRefresh(id, null, `${error.message}: ${error.detail}`.slice(0, 500));
+      // Once it has said so twice: Outlook's wording is clear, but not clear enough to
+      // retire an address on a single answer.
+      if (noteAccountFailure(id)) {
+        recordRefresh(id, null, `${error.message}: ${error.detail}`.slice(0, 500));
+      }
       console.warn(`[accounts:latest-mail] ${account.email}: ${error.detail}`);
       res.status(502).json({
         error: error.message,
@@ -417,6 +437,7 @@ router.post("/delete", (req, res) => {
     res.status(400).json({ error: "ids must be an array of numbers" });
     return;
   }
+  (ids as number[]).forEach(forgetAccount);
   res.json({ deleted: deleteAccounts(ids as number[]) });
 });
 
@@ -453,6 +474,7 @@ router.post("/refresh", async (req, res) => {
             refreshScopeFor(account.authType),
           );
           recordRefresh(account.id, token.refreshToken, null);
+          noteAccountSuccess(account.id);
           results.push({ id: account.id, email: account.email, ok: true });
         } catch (error) {
           const detail =
@@ -461,7 +483,13 @@ router.post("/refresh", async (req, res) => {
               : error instanceof Error
                 ? error.message
                 : String(error);
-          recordRefresh(account.id, null, detail);
+          // The result still reports the failure; what is withheld is marking the account
+          // for it. A batch run happens to catch every network hiccup and every throttled
+          // reply at once, which is how a panel full of working accounts ended up wearing
+          // warning badges.
+          if (isGrantFailure(error) && noteAccountFailure(account.id)) {
+            recordRefresh(account.id, null, detail);
+          }
           results.push({ id: account.id, email: account.email, ok: false, error: detail });
         }
       }),

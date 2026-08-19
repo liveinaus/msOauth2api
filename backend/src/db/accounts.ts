@@ -184,6 +184,21 @@ export function recordRefresh(id: number, refreshToken: string | null, error: st
 }
 
 /**
+ * Clears a recorded fault after the mailbox has answered.
+ *
+ * Reading mail is better proof that an account works than a token refresh is, and without
+ * this a fault recorded during a bad minute outlives it: the badge stays on the row and,
+ * because the pool skips any account carrying one, the address never comes back into
+ * circulation. `last_refresh_at` is left alone, since nothing was refreshed.
+ */
+export function clearRefreshError(id: number): void {
+  db.prepare(
+    `UPDATE accounts SET last_refresh_error = NULL, updated_at = @now
+     WHERE id = @id AND last_refresh_error IS NOT NULL`,
+  ).run({ id, now: Date.now() });
+}
+
+/**
  * Stamps the moment the address was copied out of the panel.
  *
  * Copying is the point an address gets handed to some other service, so it is the start of

@@ -254,6 +254,23 @@ Two outcomes are kept apart, because only one of them is the account's fault:
 Reading the inbox and the junk folder is likewise not all-or-nothing: if one folder answers
 and the other does not, the messages that were found are still returned.
 
+### When an account gets marked
+
+The warning badge on a row is not a log line: the pool skips any account carrying one, so a
+marked address is out of circulation until something clears it. Two rules keep it off
+working accounts.
+
+- **Only the account's own fault counts.** Microsoft rejecting the grant does; a throttled
+  (`429`), unwell (`5xx`) or unreachable token endpoint does not, nor does a timeout. Those
+  fail the request and nothing more.
+- **It has to repeat.** A verdict is only written after `ACCOUNT_FAULT_STREAK` consecutive
+  failures (default 2), and any successful read resets the count. A dead token fails every
+  time and is marked on the next attempt; a blip never gets its second one.
+
+A mailbox that answers also **clears** a mark left over from an earlier bad minute, so an
+account that recovers comes back into the pool on its own. Reading mail from the row (the
+envelope button) or running a refresh is enough to do that by hand.
+
 ## Backup and migration
 
 Settings has a **Backup and migration** card that exports the whole panel as one JSON

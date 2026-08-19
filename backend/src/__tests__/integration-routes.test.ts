@@ -418,6 +418,10 @@ describe("a mailbox that will not serve IMAP", () => {
     expect(status).toBe(502);
     expect(body).toMatchObject({ details: "User is authenticated but not connected." });
 
+    // One answer is not enough to retire an address, however plainly Outlook worded it.
+    expect(getAccountByEmail("noimap@x.com")!.lastRefreshError).toBeNull();
+
+    await call("/api/get-code?email=noimap@x.com&type=NoImap");
     const marked = getAccountByEmail("noimap@x.com")!;
     expect(marked.lastRefreshError).toMatch(/not available over IMAP/);
 
@@ -429,6 +433,51 @@ describe("a mailbox that will not serve IMAP", () => {
       if (next.status === 200) offered.push(next.body.email as unknown as string);
     }
     expect(offered).not.toContain(account.email);
+  });
+});
+
+describe("a fault that does not repeat", () => {
+  it("is forgotten as soon as the mailbox answers, badge and all", async () => {
+    const { ImapUnavailableError } = await import("../services/imap");
+    upsertAccount({
+      email: "blip@x.com",
+      password: null,
+      clientId: "c",
+      refreshToken: "t",
+    });
+
+    readFailure = new ImapUnavailableError("User is authenticated but not connected.");
+    await call("/api/get-code?email=blip@x.com&type=Blip");
+    expect(getAccountByEmail("blip@x.com")!.lastRefreshError).toBeNull();
+
+    // A good read between two bad ones ends the streak, so the second bad one is a first
+    // again. Without that, faults an hour apart would accumulate into a false verdict.
+    readFailure = null;
+    folderMessages = [];
+    await call("/api/get-code?email=blip@x.com&type=Blip");
+
+    readFailure = new ImapUnavailableError("User is authenticated but not connected.");
+    await call("/api/get-code?email=blip@x.com&type=Blip");
+    readFailure = null;
+    expect(getAccountByEmail("blip@x.com")!.lastRefreshError).toBeNull();
+  });
+
+  it("clears a fault already on the account once mail comes back", async () => {
+    const account = upsertAccount({
+      email: "recovered@x.com",
+      password: null,
+      clientId: "c",
+      refreshToken: "t",
+    });
+    const { recordRefresh } = await import("../db/accounts");
+    recordRefresh(account.id, null, "Mailbox is not available over IMAP: from an earlier blip");
+
+    readFailure = null;
+    folderMessages = [];
+    const { status } = await call("/api/get-code?email=recovered@x.com&type=Recovered");
+
+    expect(status).toBe(200);
+    expect(getAccountByEmail("recovered@x.com")!.lastRefreshError).toBeNull();
   });
 });
 

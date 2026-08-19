@@ -7,7 +7,7 @@
  */
 import { Router } from "express";
 import type { Request, Response } from "express";
-import { getAccountByEmail, recordRefresh } from "../db/accounts";
+import { clearRefreshError, getAccountByEmail, recordRefresh } from "../db/accounts";
 import { getPanelSettings } from "../db/panelSettings";
 import {
   confirmUsage,
@@ -23,7 +23,8 @@ import { ImapTemporaryError, ImapUnavailableError } from "../services/imap";
 import { findCode, parseSince } from "../services/codeSearch";
 import { findForType, rulesFor } from "../services/typeRules";
 import { readFolders } from "../services/mail";
-import { OAuthError } from "../services/oauth";
+import { isGrantFailure, OAuthError } from "../services/oauth";
+import { noteAccountFailure, noteAccountSuccess } from "../services/accountHealth";
 import { noteUsage } from "../services/usage";
 import { parseLimit, readParams } from "./params";
 import type { Account } from "../types";
@@ -39,7 +40,12 @@ const SEARCH_MAX = 50;
  */
 function sendError(res: Response, error: unknown, account?: Account): void {
   if (error instanceof OAuthError) {
-    if (account) recordRefresh(account.id, null, error.details.slice(0, 500));
+    // Only a rejected grant is the account's fault, and only once it has repeated: a
+    // throttled or unwell token endpoint says nothing about this mailbox, and marking it
+    // would take a working address out of the pool.
+    if (account && isGrantFailure(error) && noteAccountFailure(account.id)) {
+      recordRefresh(account.id, null, error.details.slice(0, 500));
+    }
     res.status(error.status).json({ error: "Refresh token failed", details: error.details });
     return;
   }
@@ -48,7 +54,9 @@ function sendError(res: Response, error: unknown, account?: Account): void {
     // reason on the panel's status badge and, more to the point here, takes the address out
     // of the pool. Without it, get-available-email would keep handing out a mailbox that
     // cannot be read, and every poll against it would fail the same way.
-    if (account) recordRefresh(account.id, null, `${error.message}: ${error.detail}`.slice(0, 500));
+    if (account && noteAccountFailure(account.id)) {
+      recordRefresh(account.id, null, `${error.message}: ${error.detail}`.slice(0, 500));
+    }
     console.warn(
       `[integration] ${account?.email ?? "mailbox"} not available over IMAP: ${error.detail}`,
     );
@@ -180,6 +188,9 @@ async function handleGetCode(req: Request, res: Response): Promise<void> {
       ["INBOX", "Junk"],
       parseLimit(params.limit, SEARCH_DEFAULT, SEARCH_MAX),
     );
+    // The mailbox answered, so anything recorded against it during a bad minute goes now.
+    noteAccountSuccess(account.id);
+    clearRefreshError(account.id);
     noteUsage(account.email, result.messages);
 
     // A configured type reads the code with its own pattern; without one this is the

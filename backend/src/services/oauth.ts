@@ -102,6 +102,36 @@ export function isGraphConsentFailure(error: unknown): boolean {
   );
 }
 
+/**
+ * Token-endpoint answers that say nothing about the grant.
+ *
+ * Microsoft replies 429 while it is throttling and 5xx while it is having a bad minute, and
+ * names the condition in the payload when it does. None of that means the refresh token is
+ * dead, so none of it should be written against the account: a recorded fault is what puts
+ * the warning badge on the row and takes the address out of the pool.
+ */
+const TRANSIENT_TOKEN_DETAILS = [
+  "temporarily_unavailable",
+  "server_error",
+  "AADSTS90033", // transient service error, retry later
+  "AADSTS50196", // request loop / server-side throttle
+  "AADSTS90014", // missing field on a truncated request
+];
+
+/**
+ * Whether a failure is proof that the account itself is broken.
+ *
+ * Deliberately narrow: only Microsoft rejecting the grant counts. A timeout, a dropped
+ * connection or a throttled endpoint is a bad moment, and marking an account for one is the
+ * false alarm this guards against -- it is far cheaper to fail a request and let the caller
+ * ask again than to quietly retire a working mailbox.
+ */
+export function isGrantFailure(error: unknown): boolean {
+  if (!(error instanceof OAuthError)) return false;
+  if (error.status === 429 || error.status >= 500) return false;
+  return !TRANSIENT_TOKEN_DETAILS.some((detail) => error.details.includes(detail));
+}
+
 export type GraphProbe = { available: boolean; accessToken: string; refreshToken: string | null };
 
 /**
