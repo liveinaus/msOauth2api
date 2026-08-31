@@ -3,7 +3,7 @@
 Turns Microsoft OAuth2 mailboxes into simple HTTP endpoints, with a Vue web panel for
 managing accounts and reading mail. Self-hosted as a single Docker container.
 
-Version **0.8.0**, MIT licensed. Pin `liveinaus/msoauth2api:0.8.0` for a fixed deployment,
+Version **0.8.1**, MIT licensed. Pin `liveinaus/msoauth2api:0.8.1` for a fixed deployment,
 or track `latest`.
 
 ## What it does
@@ -386,9 +386,9 @@ tags with the `v` stripped, plus a moving alias per channel:
 
 | Git tag         | Image tags             |
 | --------------- | ---------------------- |
-| `v0.8.0`        | `0.8.0`, `latest`      |
-| `v0.8.0-beta.1` | `0.8.0-beta.1`, `beta` |
-| `dev-v0.8.0-1`  | `dev-v0.8.0-1`, `dev`  |
+| `v0.8.1`        | `0.8.1`, `latest`      |
+| `v0.8.1-beta.1` | `0.8.1-beta.1`, `beta` |
+| `dev-v0.8.1-1`  | `dev-v0.8.1-1`, `dev`  |
 
 A stable release goes out when a GitHub release is published; beta and dev tags publish on a
 direct tag push. [.github/workflows/dockerhub-description.yml](.github/workflows/dockerhub-description.yml)
@@ -415,18 +415,21 @@ Set the app registration once, under Settings or as `OAUTH_CLIENT_ID` / `OAUTH_R
 (see [env.example](env.example)). Then, per mailbox:
 
 ```bash
-curl -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+curl -X POST -H "X-API-Key: msk_..." -H "Content-Type: application/json" \
   -d '{"email":"a@b.com"}' \
   https://panel.example.com/api/oauth/start
 # {"authorizeUrl":"https://login.microsoftonline.com/consumers/...","state":"…","expiresAt":…}
 ```
 
+`/start` takes an API key or a panel session, so a script can onboard mailboxes without a
+browser session. Note that this lets a key **create** accounts, not merely read them.
+
 Open `authorizeUrl`, sign in as `a@b.com`, accept consent. The callback answers with a page
 saying whether the mailbox was saved, and the row is on the Accounts page immediately.
 
 `clientId`, `redirectUri` and `authType` can be passed per request to override the
-configured defaults. `GET /api/oauth/config` reports what a flow would use right now, which
-is the quickest way to check a value against the app registration.
+configured defaults. The returned `authorizeUrl` carries the `client_id` and `redirect_uri`
+it resolved, so it doubles as a check that they match the app registration.
 
 Register the callback URL on the app registration exactly as the panel will send it, e.g.
 `https://panel.example.com/api/oauth/callback`. Entra allows plain `http` only for

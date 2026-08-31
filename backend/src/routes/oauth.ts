@@ -4,7 +4,7 @@ import rateLimit from "express-rate-limit";
 import { consumeFlow, startFlow } from "../auth/oauthFlowStore";
 import { clearRefreshError, upsertAccount } from "../db/accounts";
 import { getPanelSettings } from "../db/panelSettings";
-import { requireAuth } from "../middleware/auth";
+import { requireApiAccess } from "../middleware/auth";
 import { noteAccountSuccess } from "../services/accountHealth";
 import {
   AUTHORIZE_ENDPOINT,
@@ -75,7 +75,13 @@ function redirectUriProblem(value: string): string | null {
   return "redirectUri must use https, unless the host is localhost";
 }
 
-router.post("/start", requireAuth, (req, res) => {
+/**
+ * Guarded like the machine endpoints rather than the panel's: a panel session works, and so
+ * does an API key, which is what lets a script onboard mailboxes without a browser session.
+ * Connecting a mailbox is still a privileged operation -- an API key can now create an
+ * account, where before it could only read one -- so treat keys accordingly.
+ */
+router.post("/start", requireApiAccess, (req, res) => {
   const { email, clientId, authType, redirectUri } = req.body ?? {};
 
   if (typeof email !== "string" || !email.includes("@")) {
@@ -133,20 +139,6 @@ router.post("/start", requireAuth, (req, res) => {
     }).toString();
 
   res.json({ authorizeUrl, state, expiresAt, redirectUri: resolvedRedirectUri });
-});
-
-/**
- * What /start would use right now, so the operator can check it against the app
- * registration without starting a flow. The client id is not a secret -- it travels in
- * every authorize URL -- but it is only served to an authenticated panel session.
- */
-router.get("/config", requireAuth, (req, res) => {
-  const resolvedClientId = resolveClientId(undefined);
-  res.json({
-    configured: Boolean(resolvedClientId),
-    clientId: resolvedClientId,
-    redirectUri: resolveRedirectUri(undefined, req.protocol, req.get("host")),
-  });
 });
 
 function escapeHtml(value: string): string {
