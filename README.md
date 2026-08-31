@@ -3,6 +3,9 @@
 Turns Microsoft OAuth2 mailboxes into simple HTTP endpoints, with a Vue web panel for
 managing accounts and reading mail. Self-hosted as a single Docker container.
 
+Version **0.8.0**, MIT licensed. Pin `liveinaus/msoauth2api:0.8.0` for a fixed deployment,
+or track `latest`.
+
 ## What it does
 
 Given a Microsoft `client_id` and a `refresh_token`, it reads and sends mail without you
@@ -378,7 +381,18 @@ runs as the non-root `node` user, with a healthcheck on `/api/health`.
 
 Releases publish multi-arch images to Docker Hub and GHCR via
 [.github/workflows/docker-publish.yml](.github/workflows/docker-publish.yml), building
-amd64 and arm64 on native runners and merging them into one manifest.
+amd64 and arm64 on native runners and merging them into one manifest. Tags map to image
+tags with the `v` stripped, plus a moving alias per channel:
+
+| Git tag         | Image tags             |
+| --------------- | ---------------------- |
+| `v0.8.0`        | `0.8.0`, `latest`      |
+| `v0.8.0-beta.1` | `0.8.0-beta.1`, `beta` |
+| `dev-v0.8.0-1`  | `dev-v0.8.0-1`, `dev`  |
+
+A stable release goes out when a GitHub release is published; beta and dev tags publish on a
+direct tag push. [.github/workflows/dockerhub-description.yml](.github/workflows/dockerhub-description.yml)
+pushes this README to the Docker Hub repository description.
 
 ## Getting a refresh token
 
@@ -500,4 +514,8 @@ SMTP.Send, which the bulk consumer registrations these accounts come from genera
 
 ## Licence
 
-MIT, as upstream.
+MIT. The full text is in [LICENSE](LICENSE).
+
+The project is a port of an MIT-licensed upstream and keeps the same terms. MIT requires the
+copyright notice to travel with the code, so keep `LICENSE` in place if you redistribute
+this or build on it.

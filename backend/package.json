@@ -1,7 +1,8 @@
 {
   "name": "msoauth2api-backend",
-  "version": "1.0.0",
+  "version": "0.8.0",
   "private": true,
+  "license": "MIT",
   "scripts": {
     "start": "node dist/server.js",
     "build": "tsc",

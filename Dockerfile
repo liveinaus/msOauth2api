@@ -25,6 +25,12 @@ RUN npm run build && npm prune --omit=dev
 FROM node:22-bookworm-slim AS production
 WORKDIR /app
 
+# The publish workflow adds source, version and revision labels per build; the ones here are
+# fixed for the image.
+LABEL org.opencontainers.image.title="msOauth2api" \
+      org.opencontainers.image.description="Microsoft OAuth2 mailboxes as HTTP endpoints, with a Vue admin panel" \
+      org.opencontainers.image.licenses="MIT"
+
 ENV NODE_ENV=production
 
 # V8 sizes its default heap from the memory it can see, which is generous, and only collects
