@@ -129,6 +129,9 @@ export type PanelSettings = {
   usageMode: UsageMode;
   showClientId: boolean;
   showRefreshToken: boolean;
+  /** Defaults for the connect-mailbox OAuth flow. Empty means "fall back to the env vars". */
+  oauthClientId: string;
+  oauthRedirectUri: string;
 };
 
 export const DEFAULT_PANEL_SETTINGS: PanelSettings = {
@@ -138,6 +141,8 @@ export const DEFAULT_PANEL_SETTINGS: PanelSettings = {
   usageMode: "mail",
   showClientId: false,
   showRefreshToken: false,
+  oauthClientId: "",
+  oauthRedirectUri: "",
 };
 
 // ── Calls ─────────────────────────────────────────────────────────────────────

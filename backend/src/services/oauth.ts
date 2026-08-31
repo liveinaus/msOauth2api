@@ -2,6 +2,8 @@ import type { AuthType, TokenSet } from "../types";
 import { fetchWithTimeout } from "./http";
 
 const TOKEN_ENDPOINT = "https://login.microsoftonline.com/consumers/oauth2/v2.0/token";
+export const AUTHORIZE_ENDPOINT =
+  "https://login.microsoftonline.com/consumers/oauth2/v2.0/authorize";
 const GRAPH_MAIL_READ = "https://graph.microsoft.com/Mail.Read";
 
 /**
@@ -130,6 +132,125 @@ export function isGrantFailure(error: unknown): boolean {
   if (!(error instanceof OAuthError)) return false;
   if (error.status === 429 || error.status >= 500) return false;
   return !TRANSIENT_TOKEN_DETAILS.some((detail) => error.details.includes(detail));
+}
+
+/**
+ * Scopes to ask consent for when connecting a mailbox through the panel.
+ *
+ * Wider than the per-request scopes above because consent is granted once and spent many
+ * times: the account has to be able to read, delete and send later without another trip
+ * through the browser. `openid profile email` rides along so the token response carries an
+ * id_token, which is how the callback tells which mailbox actually signed in.
+ */
+const IDENTITY_SCOPE = "openid profile email";
+
+const GRAPH_CONSENT_SCOPE = [
+  "https://graph.microsoft.com/Mail.ReadWrite",
+  "https://graph.microsoft.com/Mail.Send",
+  "offline_access",
+  IDENTITY_SCOPE,
+].join(" ");
+
+const IMAP_CONSENT_SCOPE = [
+  "https://outlook.office.com/IMAP.AccessAsUser.All",
+  "https://outlook.office.com/SMTP.Send",
+  "offline_access",
+  IDENTITY_SCOPE,
+].join(" ");
+
+export function consentScopeFor(authType: AuthType): string {
+  return authType === "imap" ? IMAP_CONSENT_SCOPE : GRAPH_CONSENT_SCOPE;
+}
+
+export type AuthCodeResult = TokenSet & { idToken: string | null };
+
+/**
+ * Redeems an authorisation code for the first refresh token of an account.
+ *
+ * `redirectUri` and `verifier` have to be the ones the authorize request was built with, or
+ * Microsoft answers `invalid_grant`: the code is bound to both. A code is single-use, so a
+ * failure here means starting the flow again rather than retrying.
+ */
+export async function exchangeAuthorizationCode(input: {
+  code: string;
+  clientId: string;
+  redirectUri: string;
+  verifier: string;
+  scope: string;
+}): Promise<AuthCodeResult> {
+  const body = new URLSearchParams({
+    client_id: input.clientId,
+    grant_type: "authorization_code",
+    code: input.code,
+    redirect_uri: input.redirectUri,
+    code_verifier: input.verifier,
+    scope: input.scope,
+  });
+
+  const response = await fetchWithTimeout(
+    TOKEN_ENDPOINT,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: body.toString(),
+    },
+    "Microsoft token endpoint",
+  );
+
+  const raw = await response.text();
+  if (!response.ok) throw new OAuthError(response.status, raw);
+
+  let data: {
+    access_token?: string;
+    refresh_token?: string;
+    scope?: string;
+    id_token?: string;
+  };
+  try {
+    data = JSON.parse(raw);
+  } catch {
+    throw new OAuthError(response.status, `Malformed JSON from token endpoint: ${raw}`);
+  }
+
+  if (!data.refresh_token) {
+    throw new OAuthError(
+      response.status,
+      "Token response carried no refresh_token. Was offline_access consented?",
+    );
+  }
+
+  return {
+    accessToken: data.access_token ?? "",
+    refreshToken: data.refresh_token,
+    scope: data.scope ?? "",
+    idToken: data.id_token ?? null,
+  };
+}
+
+/**
+ * The address an id_token was issued for, or null when there is nothing usable in it.
+ *
+ * The payload is read without verifying the signature, which is safe only because of where
+ * it came from: this process asked Microsoft's token endpoint over TLS and is reading the
+ * reply to its own request. It is a sanity check on which mailbox signed in, never an
+ * authentication decision.
+ */
+export function emailFromIdToken(idToken: string | null): string | null {
+  if (!idToken) return null;
+  const payload = idToken.split(".")[1];
+  if (!payload) return null;
+  try {
+    const claims = JSON.parse(Buffer.from(payload, "base64url").toString("utf8")) as {
+      preferred_username?: unknown;
+      email?: unknown;
+    };
+    for (const claim of [claims.preferred_username, claims.email]) {
+      if (typeof claim === "string" && claim.includes("@")) return claim;
+    }
+    return null;
+  } catch {
+    return null;
+  }
 }
 
 export type GraphProbe = { available: boolean; accessToken: string; refreshToken: string | null };

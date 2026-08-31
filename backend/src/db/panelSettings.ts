@@ -17,6 +17,13 @@ export type PanelSettings = {
   usageMode: UsageMode;
   showClientId: boolean;
   showRefreshToken: boolean;
+  /**
+   * Defaults for the "connect mailbox" OAuth flow, so an operator sets the app registration
+   * once instead of on every account. Empty means "not configured", and the environment
+   * variables OAUTH_CLIENT_ID / OAUTH_REDIRECT_URI are consulted next.
+   */
+  oauthClientId: string;
+  oauthRedirectUri: string;
 };
 
 export type UsageMode = "copy" | "mail";
@@ -28,6 +35,8 @@ export const DEFAULT_PANEL_SETTINGS: PanelSettings = {
   usageMode: "mail",
   showClientId: false,
   showRefreshToken: false,
+  oauthClientId: "",
+  oauthRedirectUri: "",
 };
 
 const KEYS = {
@@ -37,6 +46,8 @@ const KEYS = {
   usageMode: "panel.usage_mode",
   showClientId: "panel.show_client_id",
   showRefreshToken: "panel.show_refresh_token",
+  oauthClientId: "panel.oauth_client_id",
+  oauthRedirectUri: "panel.oauth_redirect_uri",
 } as const;
 
 /** Bounds exist so a typo cannot set a one-second poll hammering Microsoft for an hour. */
@@ -53,6 +64,11 @@ function clamp(value: number, { min, max }: { min: number; max: number }): numbe
 function readNumber(key: string, fallback: number, bounds: { min: number; max: number }): number {
   const raw = Number(getSetting(key));
   return Number.isFinite(raw) && raw > 0 ? clamp(raw, bounds) : fallback;
+}
+
+function readString(key: string, fallback: string): string {
+  const raw = getSetting(key);
+  return typeof raw === "string" ? raw : fallback;
 }
 
 function readBoolean(key: string, fallback: boolean): boolean {
@@ -81,6 +97,8 @@ export function getPanelSettings(): PanelSettings {
     usageMode: mode === "copy" || mode === "mail" ? mode : DEFAULT_PANEL_SETTINGS.usageMode,
     showClientId: readBoolean(KEYS.showClientId, DEFAULT_PANEL_SETTINGS.showClientId),
     showRefreshToken: readBoolean(KEYS.showRefreshToken, DEFAULT_PANEL_SETTINGS.showRefreshToken),
+    oauthClientId: readString(KEYS.oauthClientId, DEFAULT_PANEL_SETTINGS.oauthClientId),
+    oauthRedirectUri: readString(KEYS.oauthRedirectUri, DEFAULT_PANEL_SETTINGS.oauthRedirectUri),
   };
 }
 
@@ -109,6 +127,14 @@ export function savePanelSettings(patch: Partial<PanelSettings>): PanelSettings 
   }
   if (typeof patch.showRefreshToken === "boolean") {
     setSetting(KEYS.showRefreshToken, String(patch.showRefreshToken));
+  }
+  // Trimmed rather than validated here: an empty string is how the field is cleared, and
+  // the OAuth route is what decides whether a value is usable.
+  if (typeof patch.oauthClientId === "string") {
+    setSetting(KEYS.oauthClientId, patch.oauthClientId.trim());
+  }
+  if (typeof patch.oauthRedirectUri === "string") {
+    setSetting(KEYS.oauthRedirectUri, patch.oauthRedirectUri.trim());
   }
   return getPanelSettings();
 }

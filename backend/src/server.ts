@@ -17,6 +17,7 @@ import backupRouter from "./routes/backup";
 import healthRouter from "./routes/health";
 import integrationRouter from "./routes/integration";
 import mailRouter from "./routes/mail";
+import oauthRouter from "./routes/oauth";
 import settingsRouter from "./routes/settings";
 import typesRouter from "./routes/types";
 
@@ -125,6 +126,7 @@ app.use("/api/auth", authRouter);
 app.use("/api/accounts", accountsRouter);
 app.use("/api/api-keys", apiKeysRouter);
 app.use("/api/backup", backupRouter);
+app.use("/api/oauth", oauthRouter);
 app.use("/api/settings", settingsRouter);
 app.use("/api/types", typesRouter);
 app.use("/api", mailRouter);

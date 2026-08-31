@@ -437,6 +437,8 @@ function parsePanel(value: unknown): PanelSettings {
     usageMode: row.usageMode === "copy" ? "copy" : DEFAULT_PANEL_SETTINGS.usageMode,
     showClientId: row.showClientId === true,
     showRefreshToken: row.showRefreshToken === true,
+    oauthClientId: text(row.oauthClientId),
+    oauthRedirectUri: text(row.oauthRedirectUri),
   };
 }
 

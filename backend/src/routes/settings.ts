@@ -25,6 +25,9 @@ router.put("/", (req, res) => {
       showClientId: typeof body.showClientId === "boolean" ? body.showClientId : undefined,
       showRefreshToken:
         typeof body.showRefreshToken === "boolean" ? body.showRefreshToken : undefined,
+      oauthClientId: typeof body.oauthClientId === "string" ? body.oauthClientId : undefined,
+      oauthRedirectUri:
+        typeof body.oauthRedirectUri === "string" ? body.oauthRedirectUri : undefined,
     }),
   );
 });

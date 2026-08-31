@@ -231,6 +231,12 @@ const en = {
       "The first waits for proof the address was actually used somewhere; the second just records that you handed it out.",
     showClientId: "Show the client ID column",
     showRefreshToken: "Show the refresh token column",
+    oauthClientId: "OAuth client id",
+    oauthClientIdHint:
+      "Application (client) id used when connecting a mailbox. Must be a public client registered for personal Microsoft accounts. Falls back to OAUTH_CLIENT_ID.",
+    oauthRedirectUri: "OAuth redirect URI",
+    oauthRedirectUriHint:
+      "Must match a redirect URI on the app registration exactly, and use https unless the host is localhost. Blank uses this panel's own address.",
     backup: "Backup and migration",
     backupHint:
       "One JSON file holding the whole panel: every account with its metadata and usage history, the type configuration, these panel settings, the API keys and the admin login. Restore it on another instance to move the system across.",
@@ -494,6 +500,12 @@ const zh: typeof en = {
     usageModeHint: "前者需要邮箱确实被使用过的证据，后者只记录你把地址交了出去。",
     showClientId: "显示客户端 ID 列",
     showRefreshToken: "显示刷新令牌列",
+    oauthClientId: "OAuth 客户端 ID",
+    oauthClientIdHint:
+      "连接邮箱时使用的应用程序（客户端）ID。必须是为个人 Microsoft 账户注册的公共客户端。留空则使用 OAUTH_CLIENT_ID。",
+    oauthRedirectUri: "OAuth 回调地址",
+    oauthRedirectUriHint:
+      "必须与应用注册中的回调地址完全一致；除 localhost 外必须使用 https。留空则使用本面板的地址。",
     backup: "备份与迁移",
     backupHint:
       "一个 JSON 文件包含整个面板：所有账户及其元数据与使用记录、用途配置、面板设置、API 密钥以及管理员登录信息。在另一个实例上导入即可整体迁移。",

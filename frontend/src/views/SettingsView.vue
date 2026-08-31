@@ -68,6 +68,18 @@
       </div>
 
       <div class="form-group">
+        <label class="form-label">{{ t("settings.oauthClientId") }}</label>
+        <input v-model="panel.oauthClientId" class="form-input" spellcheck="false" />
+        <p class="hint">{{ t("settings.oauthClientIdHint") }}</p>
+      </div>
+
+      <div class="form-group">
+        <label class="form-label">{{ t("settings.oauthRedirectUri") }}</label>
+        <input v-model="panel.oauthRedirectUri" class="form-input" spellcheck="false" />
+        <p class="hint">{{ t("settings.oauthRedirectUriHint") }}</p>
+      </div>
+
+      <div class="form-group">
         <label class="check-row">
           <input v-model="panel.showClientId" type="checkbox" />
           {{ t("settings.showClientId") }}
