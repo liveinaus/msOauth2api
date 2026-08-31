@@ -1,6 +1,13 @@
 import { db } from "./database";
 import { decryptSecret, encryptSecret, encryptionEnabled, isEncrypted } from "./crypto";
-import { parseAuthType, type Account, type AuthType } from "../types";
+import {
+  clampPriority,
+  parseAuthType,
+  PRIORITY_MAX,
+  PRIORITY_MIN,
+  type Account,
+  type AuthType,
+} from "../types";
 
 type AccountRow = {
   id: number;
@@ -9,6 +16,7 @@ type AccountRow = {
   client_id: string;
   refresh_token: string;
   auth_type: string | null;
+  priority: number | null;
   remark: string | null;
   disabled: number;
   last_refresh_at: number | null;
@@ -25,6 +33,7 @@ export type AccountInput = {
   clientId: string;
   refreshToken: string;
   authType?: AuthType;
+  priority?: number;
   remark?: string | null;
 };
 
@@ -38,6 +47,7 @@ function toAccount(row: AccountRow): Account {
     // An unrecognised value is treated as "auto" rather than failing the read: a row hand-
     // edited in the database should not take the whole account list down.
     authType: parseAuthType(row.auth_type) ?? "auto",
+    priority: clampPriority(row.priority ?? 0),
     remark: row.remark,
     disabled: row.disabled === 1,
     lastRefreshAt: row.last_refresh_at,
@@ -87,6 +97,7 @@ export function upsertAccount(input: AccountInput): Account {
          client_id     = @clientId,
          refresh_token = @refreshToken,
          auth_type     = COALESCE(@authType, auth_type),
+         priority      = COALESCE(@priority, priority),
          remark        = COALESCE(@remark, remark),
          updated_at    = @now
        WHERE id = @id`,
@@ -99,6 +110,7 @@ export function upsertAccount(input: AccountInput): Account {
       // set alone, so re-importing a plain four-field file cannot silently un-mark an
       // account as IMAP-only.
       authType: input.authType ?? null,
+      priority: input.priority === undefined ? null : clampPriority(input.priority),
       remark: input.remark ?? null,
       now,
     });
@@ -107,13 +119,15 @@ export function upsertAccount(input: AccountInput): Account {
   }
 
   db.prepare(
-    `INSERT INTO accounts (email, password, client_id, refresh_token, auth_type, remark, created_at, updated_at)
-     VALUES (@email, @password, @clientId, @refreshToken, COALESCE(@authType, 'auto'), @remark, @now, @now)
+    `INSERT INTO accounts (email, password, client_id, refresh_token, auth_type, priority, remark, created_at, updated_at)
+     VALUES (@email, @password, @clientId, @refreshToken, COALESCE(@authType, 'auto'),
+             COALESCE(@priority, 0), @remark, @now, @now)
      ON CONFLICT(email) DO UPDATE SET
        password      = excluded.password,
        client_id     = excluded.client_id,
        refresh_token = excluded.refresh_token,
        auth_type     = COALESCE(@authType, accounts.auth_type),
+       priority      = COALESCE(@priority, accounts.priority),
        remark        = COALESCE(excluded.remark, accounts.remark),
        updated_at    = excluded.updated_at`,
   ).run({
@@ -122,6 +136,7 @@ export function upsertAccount(input: AccountInput): Account {
     clientId: input.clientId,
     refreshToken: encryptSecret(input.refreshToken),
     authType: input.authType ?? null,
+    priority: input.priority === undefined ? null : clampPriority(input.priority),
     remark: input.remark ?? null,
     now,
   });
@@ -144,6 +159,7 @@ export function updateAccount(
        client_id     = @clientId,
        refresh_token = @refreshToken,
        auth_type     = @authType,
+       priority      = @priority,
        remark        = @remark,
        disabled      = @disabled,
        updated_at    = @now
@@ -152,6 +168,7 @@ export function updateAccount(
     id,
     email: patch.email ?? existing.email,
     authType: patch.authType ?? existing.authType,
+    priority: clampPriority(patch.priority ?? existing.priority),
     password: (() => {
       const next = patch.password === undefined ? existing.password : patch.password;
       return next ? encryptSecret(next) : null;
@@ -213,6 +230,51 @@ export function markCopied(id: number): Account | undefined {
 /** Records the arrival of the newest message that landed after the address was copied. */
 export function recordUsage(id: number, usedAt: number): void {
   db.prepare("UPDATE accounts SET last_used_at = ? WHERE id = ?").run(usedAt, id);
+}
+
+/**
+ * Moves a set of accounts up or down the queue by `delta`.
+ *
+ * Relative rather than absolute because that is how the panel's buttons are used: raise the
+ * handful being worked on today above the rest, without first having to know what the rest
+ * are sitting at. Clamped in SQL so a held-down button cannot run the value away.
+ */
+export function adjustPriority(ids: number[], delta: number): number {
+  if (ids.length === 0 || delta === 0) return 0;
+  const placeholders = ids.map(() => "?").join(",");
+  const result = db
+    .prepare(
+      `UPDATE accounts
+          SET priority   = MAX(?, MIN(?, priority + ?)),
+              updated_at = ?
+        WHERE id IN (${placeholders})`,
+    )
+    .run(PRIORITY_MIN, PRIORITY_MAX, delta, Date.now(), ...ids);
+  return result.changes;
+}
+
+/**
+ * One step above everything currently in the pool, for "use these first" imports.
+ *
+ * Read once per import so a whole file lands on the same rank rather than each line
+ * climbing over the one before it. An empty table starts at 1, and a pool already at the
+ * ceiling stays there, which ties with the existing top rather than failing the import.
+ */
+export function nextTopPriority(): number {
+  const row = db.prepare("SELECT MAX(priority) AS top FROM accounts").get() as {
+    top: number | null;
+  };
+  return clampPriority((row?.top ?? 0) + 1);
+}
+
+/** Sets one priority across a set of accounts, for "back to normal" and for a fixed rank. */
+export function setPriority(ids: number[], priority: number): number {
+  if (ids.length === 0) return 0;
+  const placeholders = ids.map(() => "?").join(",");
+  const result = db
+    .prepare(`UPDATE accounts SET priority = ?, updated_at = ? WHERE id IN (${placeholders})`)
+    .run(clampPriority(priority), Date.now(), ...ids);
+  return result.changes;
 }
 
 /**

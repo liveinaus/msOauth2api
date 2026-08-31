@@ -174,6 +174,14 @@ a code confirms the claim permanently, as does `confirm-email`.
 Addresses that are disabled, or whose last token refresh failed, are never handed out: an
 address that cannot receive mail is worse than none.
 
+### Priority
+
+Within the pool, addresses are handed out highest priority first, and only then in the usual
+round-robin. Select rows on the Accounts page and use the priority buttons to raise or lower
+the selection, or the cross to put it back to normal; a negative priority keeps an address in
+the pool but at the back of the queue. Priority is per address, not per type, and it does not
+override the disabled or failed-refresh rules above.
+
 ### Typical run
 
 ```bash

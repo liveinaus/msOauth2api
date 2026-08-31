@@ -301,6 +301,13 @@ body {
   align-items: center;
 }
 
+/* A cluster of buttons that act on one thing, held tighter than the row's own spacing. */
+.btn-group {
+  display: inline-flex;
+  gap: 4px;
+  align-items: center;
+}
+
 /* ── Forms ─────────────────────────────────────────────────────────────────── */
 
 .form-group {
@@ -856,4 +863,6 @@ body {
 
 .checkbox-cell {
   width: 34px;
+  /* Shift-clicking checkboxes would otherwise drag a text selection across the table. */
+  user-select: none;
 }

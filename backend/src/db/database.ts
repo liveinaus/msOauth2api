@@ -38,6 +38,9 @@ db.exec(`
     -- "auto" (Graph, falling back to IMAP) or "imap" for tokens consented only to the
     -- older Outlook IMAP permission.
     auth_type          TEXT NOT NULL DEFAULT 'auto',
+    -- Handed out ahead of lower numbers by the pool. 0 is the ordinary case; negatives sit
+    -- at the back without being disabled.
+    priority           INTEGER NOT NULL DEFAULT 0,
     remark             TEXT,
     disabled           INTEGER NOT NULL DEFAULT 0,
     last_refresh_at    INTEGER,
@@ -104,6 +107,7 @@ addColumn("accounts", "last_used_at", "INTEGER");
 // Existing rows predate the split and were all on the Graph-first path, which is what the
 // default describes, so no backfill is needed.
 addColumn("accounts", "auth_type", "TEXT NOT NULL DEFAULT 'auto'");
+addColumn("accounts", "priority", "INTEGER NOT NULL DEFAULT 0");
 
 export function getSetting(key: string): string | undefined {
   const row = db.prepare("SELECT value FROM settings WHERE key = ?").get(key) as

@@ -75,6 +75,8 @@ export type AccountView = {
   email: string;
   clientId: string;
   authType: AuthType;
+  /** Handed out ahead of lower numbers by the pool. 0 is the ordinary case. */
+  priority: number;
   hasPassword: boolean;
   tokenHint: string;
   remark: string | null;
@@ -198,12 +200,33 @@ export async function updateAccount(
 }
 
 /** `authType` applies to the whole file; a fifth field on a line overrides it. */
-export async function importAccounts(content: string, delimiter: string, authType?: AuthType) {
+export async function importAccounts(
+  content: string,
+  delimiter: string,
+  authType?: AuthType,
+  useFirst?: boolean,
+) {
   const { data } = await api.post<{
     imported: number;
     failed: number;
     errors: { line: number; reason: string }[];
-  }>("/accounts/import", { content, delimiter, authType });
+  }>("/accounts/import", { content, delimiter, authType, useFirst });
+  return data;
+}
+
+/**
+ * Bumps a selection up or down the pool's queue, or sets one value outright.
+ *
+ * The updated rows come back, so the table can show where they landed without a reload.
+ */
+export async function setAccountsPriority(
+  ids: number[],
+  change: { delta: number } | { priority: number },
+) {
+  const { data } = await api.post<{ updated: number; accounts: AccountView[] }>(
+    "/accounts/priority",
+    { ids, ...change },
+  );
   return data;
 }
 

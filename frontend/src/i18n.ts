@@ -111,13 +111,18 @@ const en = {
     refreshDone: "{ok} refreshed, {failed} failed",
     importTitle: "Import accounts",
     importHint:
-      "One account per line, four fields: email, password, client ID, refresh token. An optional fifth field sets the protocol for that line. Existing addresses are updated rather than duplicated.",
+      "One account per line, four fields: email, password, client ID, refresh token. An optional fifth field sets the protocol for that line. Priority, remark and disabled state travel in labelled fields such as priority=2, the way an export writes them; any other extra field is ignored. Existing addresses are updated rather than duplicated.",
     importDelimiter: "Delimiter",
     importPaste: "Paste account lines, or choose a file",
     importFile: "Choose file",
     importDone: "{imported} imported, {failed} skipped",
     empty: "No accounts yet. Import a file or add one to get started.",
     tokenHidden: "Stored on the server and never sent to this page",
+    priority: "Priority",
+    priorityHint:
+      "Addresses with a higher priority are handed out by the API before the rest of the pool. Select rows, then bump them up or down; the cross puts them back to normal.",
+    clearPriority: "Reset priority",
+    priorityDone: "Priority changed on {n} account(s)",
     authTypeLabel: "Protocol",
     authType: {
       auto: "Auto (Graph, then IMAP)",
@@ -130,6 +135,9 @@ const en = {
     setAuthTypeHint: "Set the protocol for the selected accounts",
     authTypeDone: "{n} account(s) set to {type}",
     importAuthTypeHint: "Applies to every line without a fifth field",
+    importUseFirst: "Set to the highest priority (use first)",
+    importUseFirstHint:
+      "Imports these accounts one step above the current highest priority, so the API spends them before the rest of the pool. Off keeps the priority written in the file, or the normal priority when the file does not say.",
   },
   mail: {
     title: "Mailbox",
@@ -370,13 +378,17 @@ const zh: typeof en = {
     refreshDone: "成功 {ok} 个，失败 {failed} 个",
     importTitle: "导入账户",
     importHint:
-      "每行一个账户，四个字段：邮箱、密码、客户端 ID、刷新令牌。可选的第五个字段用于指定该行的协议。已存在的邮箱会被更新，不会重复添加。",
+      "每行一个账户，四个字段：邮箱、密码、客户端 ID、刷新令牌。可选的第五个字段用于指定该行的协议。优先级、备注与停用状态以 priority=2 这类带标签的字段书写（导出文件即为此格式），其余多余字段会被忽略。已存在的邮箱会被更新，不会重复添加。",
     importDelimiter: "分隔符",
     importPaste: "粘贴账户数据，或选择文件",
     importFile: "选择文件",
     importDone: "导入 {imported} 条，跳过 {failed} 条",
     empty: "暂无账户，请先导入文件或手动添加。",
     tokenHidden: "保存在服务器，不会发送到本页面",
+    priority: "优先级",
+    priorityHint: "优先级较高的邮箱会被 API 优先分配。勾选后可上调或下调，按叉号恢复为普通。",
+    clearPriority: "重置优先级",
+    priorityDone: "已修改 {n} 个账户的优先级",
     authTypeLabel: "协议",
     authType: {
       auto: "自动（先 Graph，后 IMAP）",
@@ -389,6 +401,9 @@ const zh: typeof en = {
     setAuthTypeHint: "为所选账户设置协议",
     authTypeDone: "已将 {n} 个账户设为 {type}",
     importAuthTypeHint: "适用于所有未填写第五个字段的行",
+    importUseFirst: "设为最高优先级（优先使用）",
+    importUseFirstHint:
+      "导入的账户优先级会比当前最高优先级再高一级，API 会先使用它们。关闭时按文件中写明的优先级导入，文件未写明则为普通优先级。",
   },
   mail: {
     title: "邮箱",

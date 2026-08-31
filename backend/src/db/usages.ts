@@ -96,6 +96,9 @@ export type LeaseResult =
  * handed the same address. Addresses whose last lease expired go to the back of the queue,
  * which spreads use around the pool rather than hammering the lowest id.
  *
+ * Priority is read first, so a marked address is spent before the rest of the pool is
+ * touched; within one priority the round-robin above still applies.
+ *
  * Accounts carrying a refresh error are skipped: they cannot fetch mail, so an address that
  * cannot receive a code is worse than none at all.
  */
@@ -110,7 +113,7 @@ export function leaseAccount(type: string, leaseMs: number): LeaseResult {
           WHERE a.disabled = 0
             AND a.last_refresh_error IS NULL
             AND NOT (${UNAVAILABLE})
-          ORDER BY last_leased ASC, a.id ASC
+          ORDER BY a.priority DESC, last_leased ASC, a.id ASC
           LIMIT 1`,
       )
       .get({ type: kind, now }) as { account_id: number } | undefined;

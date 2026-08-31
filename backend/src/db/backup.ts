@@ -15,7 +15,7 @@
  * mailbox on both ends.
  */
 import { adminSnapshot, restoreAdminSnapshot, type AdminSnapshot } from "../auth/credentials";
-import { parseAuthType, type AuthType } from "../types";
+import { parseAuthType, parsePriority, type AuthType } from "../types";
 import { listAccounts } from "./accounts";
 import { encryptSecret } from "./crypto";
 import { db } from "./database";
@@ -48,6 +48,7 @@ export type BackupAccount = {
   clientId: string;
   refreshToken: string;
   authType: AuthType;
+  priority: number;
   remark: string | null;
   disabled: boolean;
   lastRefreshAt: number | null;
@@ -154,6 +155,7 @@ export function exportBackup(): Backup {
       clientId: account.clientId,
       refreshToken: account.refreshToken,
       authType: account.authType,
+      priority: account.priority,
       remark: account.remark,
       disabled: account.disabled,
       lastRefreshAt: account.lastRefreshAt,
@@ -296,6 +298,7 @@ export function parseBackup(input: unknown): { backup: Backup; skipped: ImportRe
       clientId,
       refreshToken,
       authType: parseAuthType(row.authType) ?? "auto",
+      priority: parsePriority(row.priority) ?? 0,
       remark: nullableText(row.remark),
       disabled: row.disabled === true,
       lastRefreshAt: nullableStamp(row.lastRefreshAt),
@@ -477,10 +480,10 @@ export function importBackup(
   // place: an upsert would consume an id per losing insert and step the counter through a
   // re-import of the whole file.
   const insertAccount = db.prepare(
-    `INSERT INTO accounts (email, password, client_id, refresh_token, auth_type, remark, disabled,
-                           last_refresh_at, last_refresh_error, last_copied_at, last_used_at,
-                           created_at, updated_at)
-     VALUES (@email, @password, @clientId, @refreshToken, @authType, @remark, @disabled,
+    `INSERT INTO accounts (email, password, client_id, refresh_token, auth_type, priority, remark,
+                           disabled, last_refresh_at, last_refresh_error, last_copied_at,
+                           last_used_at, created_at, updated_at)
+     VALUES (@email, @password, @clientId, @refreshToken, @authType, @priority, @remark, @disabled,
              @lastRefreshAt, @lastRefreshError, @lastCopiedAt, @lastUsedAt, @createdAt, @updatedAt)`,
   );
   // Replace restores the source's own ids, so the panel's # column, and anything an
@@ -488,11 +491,12 @@ export function importBackup(
   // AUTOINCREMENT carries sqlite_sequence forward from the highest id inserted, so the next
   // account added locally does not collide.
   const insertAccountWithId = db.prepare(
-    `INSERT INTO accounts (id, email, password, client_id, refresh_token, auth_type, remark, disabled,
-                           last_refresh_at, last_refresh_error, last_copied_at, last_used_at,
-                           created_at, updated_at)
-     VALUES (@id, @email, @password, @clientId, @refreshToken, @authType, @remark, @disabled,
-             @lastRefreshAt, @lastRefreshError, @lastCopiedAt, @lastUsedAt, @createdAt, @updatedAt)`,
+    `INSERT INTO accounts (id, email, password, client_id, refresh_token, auth_type, priority,
+                           remark, disabled, last_refresh_at, last_refresh_error, last_copied_at,
+                           last_used_at, created_at, updated_at)
+     VALUES (@id, @email, @password, @clientId, @refreshToken, @authType, @priority, @remark,
+             @disabled, @lastRefreshAt, @lastRefreshError, @lastCopiedAt, @lastUsedAt, @createdAt,
+             @updatedAt)`,
   );
   const updateAccountRow = db.prepare(
     `UPDATE accounts SET
@@ -500,6 +504,7 @@ export function importBackup(
        client_id          = @clientId,
        refresh_token      = @refreshToken,
        auth_type          = @authType,
+       priority           = @priority,
        remark             = @remark,
        disabled           = @disabled,
        last_refresh_at    = @lastRefreshAt,
@@ -565,6 +570,7 @@ export function importBackup(
         clientId: account.clientId,
         refreshToken: encryptSecret(account.refreshToken),
         authType: account.authType,
+        priority: account.priority,
         remark: account.remark,
         disabled: account.disabled ? 1 : 0,
         lastRefreshAt: account.lastRefreshAt,

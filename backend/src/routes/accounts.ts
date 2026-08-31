@@ -1,13 +1,16 @@
 import { Router } from "express";
 import {
+  adjustPriority,
   deleteAccounts,
   getAccount,
   listAccounts,
   markCopied,
   clearRefreshError,
+  nextTopPriority,
   recordRefresh,
   recordUsage,
   setAuthType,
+  setPriority,
   updateAccount,
   upsertAccount,
 } from "../db/accounts";
@@ -34,7 +37,7 @@ import {
 } from "../services/oauth";
 import { findForType, rulesFor } from "../services/typeRules";
 import { noteUsage } from "../services/usage";
-import { AUTH_TYPES, parseAuthType, type Account } from "../types";
+import { AUTH_TYPES, parseAuthType, parsePriority, type Account, type AuthType } from "../types";
 
 const router = Router();
 
@@ -69,6 +72,7 @@ function toPublic(account: Account, usages: Usage[] = listUsages(account.id)) {
     email: account.email,
     clientId: account.clientId,
     authType: account.authType,
+    priority: account.priority,
     hasPassword: Boolean(account.password),
     tokenHint: `${account.refreshToken.slice(0, 6)}…${account.refreshToken.slice(-4)}`,
     remark: account.remark,
@@ -80,6 +84,12 @@ function toPublic(account: Account, usages: Usage[] = listUsages(account.id)) {
     createdAt: account.createdAt,
     updatedAt: account.updatedAt,
   };
+}
+
+/** The public view of one account by id, for endpoints that report back what they changed. */
+function publicById(id: number) {
+  const account = getAccount(id);
+  return account ? toPublic(account) : null;
 }
 
 router.get("/", (_req, res) => {
@@ -121,6 +131,46 @@ router.post("/", (req, res) => {
 });
 
 /**
+ * Reads what the exporter writes after the four required fields: a protocol name in the
+ * fifth position, then `priority`, `remark` and `disabled` as labelled `key=value` fields
+ * in any order.
+ *
+ * Labelled rather than positional because a real file's own trailing columns have to stay
+ * ignorable -- reading column six as a priority would let stray data rewrite the queue.
+ * Anything unlabelled, or labelled with something else, is skipped as before.
+ */
+function parseTailFields(fields: string[]): {
+  authType?: AuthType;
+  priority?: number;
+  remark?: string;
+  disabled?: boolean;
+} {
+  const tail: { authType?: AuthType; priority?: number; remark?: string; disabled?: boolean } = {
+    authType: parseAuthType(fields[4]) ?? undefined,
+  };
+
+  for (const field of fields.slice(4)) {
+    const at = field.indexOf("=");
+    if (at === -1) continue;
+    const key = field.slice(0, at).trim().toLowerCase();
+    const value = field.slice(at + 1).trim();
+    if (key === "priority" && value) tail.priority = parsePriority(Number(value)) ?? undefined;
+    else if (key === "remark") tail.remark = value;
+    else if (key === "disabled") tail.disabled = value === "1" || value.toLowerCase() === "true";
+  }
+  return tail;
+}
+
+/** Keeps free text inside one field: a newline or the delimiter would split the record. */
+function oneLine(value: string, sep: string): string {
+  return value
+    .replace(/[\r\n]+/g, " ")
+    .split(sep)
+    .join(" ")
+    .trim();
+}
+
+/**
  * Bulk import.
  *
  * Upstream parsed a delimited file in the browser and appended every line blindly, so a
@@ -131,9 +181,20 @@ router.post("/", (req, res) => {
  * file, which is how a batch of IMAP-only accounts gets marked in one go, and an optional
  * fifth field on a line overrides it for that account. With neither, an existing account
  * keeps the type it already has and a new one starts on "auto".
+ *
+ * Only the first four fields are part of the format, so a fifth field is read as the auth
+ * type when it names one and otherwise ignored, along with any further fields. Real files
+ * carry trailing columns of their own, and losing a whole account over one is not worth it.
+ * The rest of an account -- priority, remark, disabled -- rides in labelled `key=value`
+ * fields after those, which is what the exporter writes; see parseTailFields.
+ *
+ * `useFirst` lands the whole file one step above everything already in the pool, which is
+ * what a fresh batch is usually for. It is off by default here so an existing script keeps
+ * importing at the normal rank; the panel asks the question and sends an answer either way.
+ * Asking for it is a decision about this import, so it beats a priority written in the file.
  */
 router.post("/import", (req, res) => {
-  const { content, delimiter, authType } = req.body ?? {};
+  const { content, delimiter, authType, useFirst } = req.body ?? {};
   if (typeof content !== "string" || !content.trim()) {
     res.status(400).json({ error: "content is required" });
     return;
@@ -142,8 +203,14 @@ router.post("/import", (req, res) => {
     res.status(400).json({ error: `authType must be one of: ${AUTH_TYPES.join(", ")}` });
     return;
   }
+  if (useFirst !== undefined && typeof useFirst !== "boolean") {
+    res.status(400).json({ error: "useFirst must be a boolean" });
+    return;
+  }
   const sep = typeof delimiter === "string" && delimiter ? delimiter : "----";
   const fileAuthType = parseAuthType(authType) ?? undefined;
+  // Read before the first line is written, so every account in the file shares one rank.
+  const priority = useFirst === true ? nextTopPriority() : undefined;
 
   const errors: { line: number; reason: string }[] = [];
   let imported = 0;
@@ -158,7 +225,7 @@ router.post("/import", (req, res) => {
       return;
     }
 
-    const [email, password, clientId, refreshToken, lineAuthType] = fields;
+    const [email, password, clientId, refreshToken] = fields;
     if (!email || !clientId || !refreshToken) {
       errors.push({
         line: index + 1,
@@ -166,21 +233,22 @@ router.post("/import", (req, res) => {
       });
       return;
     }
-    if (lineAuthType && parseAuthType(lineAuthType) === null) {
-      errors.push({
-        line: index + 1,
-        reason: `field 5 must be one of: ${AUTH_TYPES.join(", ")}`,
-      });
-      return;
-    }
 
-    upsertAccount({
+    const tail = parseTailFields(fields);
+    const account = upsertAccount({
       email,
       password: password || null,
       clientId,
       refreshToken,
-      authType: parseAuthType(lineAuthType) ?? fileAuthType,
+      authType: tail.authType ?? fileAuthType,
+      priority: priority ?? tail.priority,
+      remark: tail.remark,
     });
+    // Not part of the upsert: a line that says nothing about it must leave a disabled
+    // account disabled rather than quietly putting it back in the pool.
+    if (tail.disabled !== undefined && tail.disabled !== account.disabled) {
+      updateAccount(account.id, { disabled: tail.disabled });
+    }
     imported++;
   });
 
@@ -193,12 +261,24 @@ router.post("/import", (req, res) => {
  * The auth type is written as a fifth field so an export round-trips: without it, restoring
  * a backup would put every IMAP-only account back on the Graph-first path. The importer
  * still takes four-field lines, so older files keep working.
+ *
+ * Everything else the panel lets you set on an account -- its place in the queue, its remark
+ * and whether it is switched off -- follows as labelled fields, and only when it has moved
+ * off the default, so an ordinary pool still exports as the plain five-field file other
+ * tools expect. What is not here is history rather than settings (when an address was last
+ * used, and what it was used for); the JSON backup carries that.
  */
 router.get("/export", (req, res) => {
   const sep =
     typeof req.query.delimiter === "string" && req.query.delimiter ? req.query.delimiter : "----";
   const body = listAccounts()
-    .map((a) => [a.email, a.password ?? "", a.clientId, a.refreshToken, a.authType].join(sep))
+    .map((a) => {
+      const fields = [a.email, a.password ?? "", a.clientId, a.refreshToken, a.authType];
+      if (a.priority !== 0) fields.push(`priority=${a.priority}`);
+      if (a.remark) fields.push(`remark=${oneLine(a.remark, sep)}`);
+      if (a.disabled) fields.push("disabled=1");
+      return fields.join(sep);
+    })
     .join("\n");
 
   res.type("text/plain").attachment("accounts.txt").send(body);
@@ -206,14 +286,20 @@ router.get("/export", (req, res) => {
 
 router.patch("/:id", (req, res) => {
   const id = Number(req.params.id);
-  const { email, password, clientId, refreshToken, authType, remark, disabled } = req.body ?? {};
+  const { email, password, clientId, refreshToken, authType, priority, remark, disabled } =
+    req.body ?? {};
 
   if (authType !== undefined && parseAuthType(authType) === null) {
     res.status(400).json({ error: `authType must be one of: ${AUTH_TYPES.join(", ")}` });
     return;
   }
+  if (priority !== undefined && parsePriority(priority) === null) {
+    res.status(400).json({ error: "priority must be a number" });
+    return;
+  }
 
   const updated = updateAccount(id, {
+    priority: priority === undefined ? undefined : (parsePriority(priority) ?? undefined),
     email: typeof email === "string" ? email.trim() : undefined,
     password: typeof password === "string" ? password : undefined,
     clientId: typeof clientId === "string" ? clientId.trim() : undefined,
@@ -429,6 +515,41 @@ router.post("/auth-type", (req, res) => {
   }
 
   res.json({ updated: setAuthType(ids as number[], parsed) });
+});
+
+/**
+ * Moves a selection up or down the pool's queue.
+ *
+ * `delta` is the panel's bump buttons, `priority` an outright set for putting a batch back
+ * to normal. Both are accepted on one endpoint because they are the same edit, and the
+ * updated rows come back so the caller does not have to reload the list to see where they
+ * landed.
+ */
+router.post("/priority", (req, res) => {
+  const { ids, delta, priority } = req.body ?? {};
+  if (!Array.isArray(ids) || ids.some((id) => typeof id !== "number")) {
+    res.status(400).json({ error: "ids must be an array of numbers" });
+    return;
+  }
+
+  if (delta !== undefined) {
+    const step = parsePriority(delta);
+    if (step === null) {
+      res.status(400).json({ error: "delta must be a number" });
+      return;
+    }
+    const updated = adjustPriority(ids as number[], step);
+    res.json({ updated, accounts: (ids as number[]).map(publicById).filter(Boolean) });
+    return;
+  }
+
+  const value = parsePriority(priority);
+  if (value === null) {
+    res.status(400).json({ error: "delta or priority is required" });
+    return;
+  }
+  const updated = setPriority(ids as number[], value);
+  res.json({ updated, accounts: (ids as number[]).map(publicById).filter(Boolean) });
 });
 
 router.post("/delete", (req, res) => {

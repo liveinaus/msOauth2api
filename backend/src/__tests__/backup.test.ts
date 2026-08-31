@@ -25,6 +25,7 @@ function seed(): void {
     clientId: "cid-one",
     refreshToken: "rt-one",
     authType: "imap",
+    priority: 3,
     remark: "first",
   });
   upsertAccount({ email: "two@example.com", clientId: "cid-two", refreshToken: "rt-two" });
@@ -63,6 +64,7 @@ describe("backup", () => {
       clientId: "cid-one",
       refreshToken: "rt-one",
       authType: "imap",
+      priority: 3,
       remark: "first",
       disabled: false,
     });
@@ -93,6 +95,7 @@ describe("backup", () => {
       password: "pw-one",
       refreshToken: "rt-one",
       authType: "imap",
+      priority: 3,
       remark: "first",
     });
     // Timestamps are part of the metadata, not stamped afresh on import.

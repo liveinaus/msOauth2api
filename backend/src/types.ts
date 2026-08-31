@@ -17,6 +17,26 @@ export function parseAuthType(value: unknown): AuthType | null {
   return AUTH_TYPES.includes(normalised as AuthType) ? (normalised as AuthType) : null;
 }
 
+/**
+ * How far ahead of the rest of the pool an address is handed out.
+ *
+ * Bounded because the value is a rank, not a score: without a ceiling a few rounds of the
+ * panel's bump buttons would leave numbers nothing else could ever catch up with.
+ */
+export const PRIORITY_MIN = -99;
+export const PRIORITY_MAX = 99;
+
+/** Reads a caller-supplied priority, or null when it is not a usable number. */
+export function parsePriority(value: unknown): number | null {
+  const n = typeof value === "number" ? value : Number.NaN;
+  if (!Number.isFinite(n)) return null;
+  return clampPriority(Math.trunc(n));
+}
+
+export function clampPriority(value: number): number {
+  return Math.min(PRIORITY_MAX, Math.max(PRIORITY_MIN, value));
+}
+
 /** A stored mail account. Secrets are decrypted by the time a caller sees this. */
 export type Account = {
   id: number;
@@ -25,6 +45,7 @@ export type Account = {
   clientId: string;
   refreshToken: string;
   authType: AuthType;
+  priority: number;
   remark: string | null;
   disabled: boolean;
   lastRefreshAt: number | null;

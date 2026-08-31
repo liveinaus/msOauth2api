@@ -32,6 +32,22 @@
           <i class="fa-solid fa-rotate"></i>
           {{ refreshing ? t("accounts.refreshing") : t("accounts.refreshTokens") }}
         </button>
+        <span class="btn-group" :title="t('accounts.priorityHint')">
+          <button class="btn" :disabled="!selected.size || bumping" @click="bumpPriority(1)">
+            <i class="fa-solid fa-arrow-up"></i> {{ t("accounts.priority") }}
+          </button>
+          <button class="btn" :disabled="!selected.size || bumping" @click="bumpPriority(-1)">
+            <i class="fa-solid fa-arrow-down"></i>
+          </button>
+          <button
+            class="btn"
+            :disabled="!selected.size || bumping"
+            :title="t('accounts.clearPriority')"
+            @click="resetPriority"
+          >
+            <i class="fa-solid fa-xmark"></i>
+          </button>
+        </span>
         <select
           v-model="bulkAuthType"
           class="form-input"
@@ -70,6 +86,7 @@
               <input type="checkbox" :checked="allVisibleSelected" @change="toggleAll" />
             </th>
             <th class="seq-cell">{{ t("accounts.seq") }}</th>
+            <th class="seq-cell" :title="t('accounts.priorityHint')">{{ t("accounts.priority") }}</th>
             <th>{{ t("accounts.email") }}</th>
             <th class="code-cell">{{ t("accounts.code") }}</th>
             <th v-if="panel.showClientId">{{ t("accounts.clientId") }}</th>
@@ -84,9 +101,25 @@
         <tbody>
           <tr v-for="account in pageItems" :key="account.id" :class="{ 'row-pinned': isPinned(account.id) }">
             <td class="checkbox-cell">
-              <input type="checkbox" :checked="selected.has(account.id)" @change="toggle(account.id)" />
+              <input
+                type="checkbox"
+                :checked="selected.has(account.id)"
+                @click="selectClick(account.id, $event)"
+              />
             </td>
             <td class="seq-cell mono muted" :title="t('accounts.seqHint')">{{ account.id }}</td>
+            <td class="seq-cell">
+              <!-- Only a set priority is worth ink; 0 is most of the list. -->
+              <span
+                v-if="account.priority"
+                class="badge"
+                :class="account.priority > 0 ? 'badge-type' : 'badge-off'"
+                :title="t('accounts.priorityHint')"
+              >
+                {{ account.priority > 0 ? `+${account.priority}` : account.priority }}
+              </span>
+              <span v-else class="muted">—</span>
+            </td>
             <td>
               <div class="cell-row email-cell">
                 <span class="clickable" :title="t('accounts.copyEmail')" @click="copyEmail(account)">
@@ -362,6 +395,13 @@
             <p class="hint">{{ t("accounts.importAuthTypeHint") }}</p>
           </div>
           <div class="form-group">
+            <label class="check-row">
+              <input v-model="importUseFirst" type="checkbox" />
+              {{ t("accounts.importUseFirst") }}
+            </label>
+            <p class="hint">{{ t("accounts.importUseFirstHint") }}</p>
+          </div>
+          <div class="form-group">
             <label class="form-label">{{ t("accounts.importPaste") }}</label>
             <textarea v-model="importText" class="form-textarea" spellcheck="false"></textarea>
           </div>
@@ -448,6 +488,7 @@ import {
   markAccountCopied,
   refreshAccountTokens,
   setAccountsAuthType,
+  setAccountsPriority,
   setAccountUsage,
   updateAccount,
   DEFAULT_PANEL_SETTINGS,
@@ -497,6 +538,8 @@ const marker = ref<{ accountId: number; top: number; left: number } | null>(null
 const page = ref(1);
 const pageSize = persistentRef("accounts.pageSize", 25);
 const selected = ref(new Set<number>());
+// Where a shift-click range starts: the last checkbox clicked without shift held.
+const anchorId = ref<number | null>(null);
 
 const panel = ref<PanelSettings>({ ...DEFAULT_PANEL_SETTINGS });
 
@@ -526,6 +569,8 @@ const delimiter = ref("----");
 const importText = ref("");
 const importErrors = ref<{ line: number; reason: string }[]>([]);
 const importAuthType = ref<AuthType>("auto");
+// A freshly imported batch is normally the one you want spent next, so this starts on.
+const importUseFirst = ref(true);
 const draft = ref<{
   email: string;
   clientId: string;
@@ -534,6 +579,7 @@ const draft = ref<{
   remark: string;
 }>({ email: "", clientId: "", refreshToken: "", authType: "auto", remark: "" });
 const markingAuthType = ref(false);
+const bumping = ref(false);
 /** Empty is the placeholder; picking a value applies it and snaps back. */
 const bulkAuthType = ref<AuthType | "">("");
 
@@ -580,7 +626,13 @@ const filtered = computed(() => {
   });
 });
 
-const pageItems = computed(() => pageSlice(filtered.value, page.value, pageSize.value));
+/**
+ * Ordered the way the pool hands addresses out, so the top of the table is what the API will
+ * spend next. Ties keep id order, which leaves an unmarked list looking exactly as before.
+ */
+const ordered = computed(() => [...filtered.value].sort((a, b) => b.priority - a.priority || a.id - b.id));
+
+const pageItems = computed(() => pageSlice(ordered.value, page.value, pageSize.value));
 
 const allVisibleSelected = computed(
   () => pageItems.value.length > 0 && pageItems.value.every((a) => selected.value.has(a.id)),
@@ -639,11 +691,36 @@ onUnmounted(() => {
   revokeLatestFrame();
 });
 
-function toggle(id: number): void {
+/**
+ * Checkbox clicks, with shift extending from the last plainly clicked row. The anchor's own
+ * state drives the range, so shift-click both fills and clears runs. An anchor no longer on
+ * the page leaves nothing to span, so that falls back to a plain toggle.
+ */
+function selectClick(id: number, event: MouseEvent): void {
+  const rows = pageItems.value;
+  const anchor = anchorId.value;
+  const from = anchor === null ? -1 : rows.findIndex((a) => a.id === anchor);
+  const to = rows.findIndex((a) => a.id === id);
   const next = new Set(selected.value);
-  if (next.has(id)) next.delete(id);
-  else next.add(id);
+
+  if (event.shiftKey && anchor !== null && from !== -1 && to !== -1 && from !== to) {
+    const select = next.has(anchor);
+    const [start, end] = from < to ? [from, to] : [to, from];
+    for (const row of rows.slice(start, end + 1)) {
+      if (select) next.add(row.id);
+      else next.delete(row.id);
+    }
+  } else if (next.has(id)) {
+    next.delete(id);
+  } else {
+    next.add(id);
+  }
+
   selected.value = next;
+  anchorId.value = id;
+  // The browser has already flipped this box; a shift range can disagree with that, and Vue
+  // patches nothing when the bound value has not moved, so set it from state directly.
+  (event.target as HTMLInputElement).checked = next.has(id);
 }
 
 function toggleAll(): void {
@@ -886,7 +963,12 @@ async function runImport(): Promise<void> {
   error.value = "";
   importErrors.value = [];
   try {
-    const result = await importAccounts(importText.value, delimiter.value, importAuthType.value);
+    const result = await importAccounts(
+      importText.value,
+      delimiter.value,
+      importAuthType.value,
+      importUseFirst.value,
+    );
     importErrors.value = result.errors;
     flash(t("accounts.importDone", { imported: result.imported, failed: result.failed }));
     if (result.failed === 0) {
@@ -947,6 +1029,37 @@ async function markAuthType(authType: AuthType): Promise<void> {
     error.value = errorMessage(err, "Could not set auth type");
   } finally {
     markingAuthType.value = false;
+  }
+}
+
+/**
+ * Bumps the selection one step up or down the queue.
+ *
+ * The rows that come back are patched into the list rather than reloading it: a reload would
+ * drop the selection, and bumping twice in a row is the normal way to use this.
+ */
+async function bumpPriority(delta: number): Promise<void> {
+  await applyPriority({ delta });
+}
+
+/** Puts the selection back to the ordinary case, without having to count clicks back down. */
+async function resetPriority(): Promise<void> {
+  await applyPriority({ priority: 0 });
+}
+
+async function applyPriority(change: { delta: number } | { priority: number }): Promise<void> {
+  if (!selected.value.size) return;
+  bumping.value = true;
+  error.value = "";
+  try {
+    const result = await setAccountsPriority([...selected.value], change);
+    const byId = new Map(result.accounts.map((a) => [a.id, a]));
+    accounts.value = accounts.value.map((a) => byId.get(a.id) ?? a);
+    flash(t("accounts.priorityDone", { n: result.updated }));
+  } catch (err) {
+    error.value = errorMessage(err, "Could not change priority");
+  } finally {
+    bumping.value = false;
   }
 }
 
