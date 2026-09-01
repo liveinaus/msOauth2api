@@ -3,7 +3,7 @@
 Turns Microsoft OAuth2 mailboxes into simple HTTP endpoints, with a Vue web panel for
 managing accounts and reading mail. Self-hosted as a single Docker container.
 
-Version **0.8.1**, MIT licensed. Pin `liveinaus/msoauth2api:0.8.1` for a fixed deployment,
+Version **0.8.2**, MIT licensed. Pin `liveinaus/msoauth2api:0.8.2` for a fixed deployment,
 or track `latest`.
 
 ## What it does
@@ -420,9 +420,9 @@ tags with the `v` stripped, plus a moving alias per channel:
 
 | Git tag         | Image tags             |
 | --------------- | ---------------------- |
-| `v0.8.1`        | `0.8.1`, `latest`      |
-| `v0.8.1-beta.1` | `0.8.1-beta.1`, `beta` |
-| `dev-v0.8.1-1`  | `dev-v0.8.1-1`, `dev`  |
+| `v0.8.2`        | `0.8.2`, `latest`      |
+| `v0.8.2-beta.1` | `0.8.2-beta.1`, `beta` |
+| `dev-v0.8.2-1`  | `dev-v0.8.2-1`, `dev`  |
 
 A stable release goes out when a GitHub release is published; beta and dev tags publish on a
 direct tag push. [.github/workflows/dockerhub-description.yml](.github/workflows/dockerhub-description.yml)
