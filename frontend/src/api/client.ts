@@ -132,7 +132,18 @@ export type PanelSettings = {
   /** Defaults for the connect-mailbox OAuth flow. Empty means "fall back to the env vars". */
   oauthClientId: string;
   oauthRedirectUri: string;
+  /** Where an account connected through the OAuth callback lands in the pool queue. */
+  oauthPriorityMode: OauthPriorityMode;
+  /** The rank used when the mode is "fixed". */
+  oauthPriorityValue: number;
+  /** Refresh a token this many days after its last refresh. Zero turns the sweep off. */
+  autoRefreshMaxDays: number;
+  /** Local time of day the sweep runs, `HH:MM`. */
+  autoRefreshAt: string;
 };
+
+export type OauthPriorityMode =
+  "normal" | "highestPlusOne" | "highest" | "lowest" | "lowestMinusOne" | "fixed";
 
 export const DEFAULT_PANEL_SETTINGS: PanelSettings = {
   pollDurationMinutes: 5,
@@ -143,6 +154,10 @@ export const DEFAULT_PANEL_SETTINGS: PanelSettings = {
   showRefreshToken: false,
   oauthClientId: "",
   oauthRedirectUri: "",
+  oauthPriorityMode: "normal",
+  oauthPriorityValue: 0,
+  autoRefreshMaxDays: 0,
+  autoRefreshAt: "04:00",
 };
 
 // ── Calls ─────────────────────────────────────────────────────────────────────
@@ -179,8 +194,14 @@ export async function fetchHealth() {
   return data;
 }
 
-export async function fetchAccounts() {
-  const { data } = await api.get<AccountView[]>("/accounts");
+export type AccountSort =
+  "id" | "priority" | "email" | "clientId" | "status" | "lastRefreshAt" | "lastUsedAt";
+
+export type SortDir = "asc" | "desc";
+
+/** The server decides the order, so paging cannot take a page from a differently sorted list. */
+export async function fetchAccounts(sort?: AccountSort, dir?: SortDir) {
+  const { data } = await api.get<AccountView[]>("/accounts", { params: { sort, dir } });
   return data;
 }
 

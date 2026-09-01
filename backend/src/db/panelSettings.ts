@@ -1,4 +1,5 @@
 import { getSetting, setSetting } from "./database";
+import { clampPriority, parseOauthPriorityMode, type OauthPriorityMode } from "../types";
 
 /**
  * Panel preferences.
@@ -24,6 +25,18 @@ export type PanelSettings = {
    */
   oauthClientId: string;
   oauthRedirectUri: string;
+  /** Where an account connected through the OAuth callback lands in the pool queue. */
+  oauthPriorityMode: OauthPriorityMode;
+  /** The rank used when the mode is "fixed"; ignored otherwise. */
+  oauthPriorityValue: number;
+  /**
+   * Refresh a token this many days after its last successful refresh. Zero turns the sweep
+   * off entirely, which is the default: a panel that has not asked for it should not be
+   * talking to Microsoft on a timer.
+   */
+  autoRefreshMaxDays: number;
+  /** Local time of day the sweep runs, `HH:MM`. */
+  autoRefreshAt: string;
 };
 
 export type UsageMode = "copy" | "mail";
@@ -37,6 +50,10 @@ export const DEFAULT_PANEL_SETTINGS: PanelSettings = {
   showRefreshToken: false,
   oauthClientId: "",
   oauthRedirectUri: "",
+  oauthPriorityMode: "normal",
+  oauthPriorityValue: 0,
+  autoRefreshMaxDays: 0,
+  autoRefreshAt: "04:00",
 };
 
 const KEYS = {
@@ -48,6 +65,12 @@ const KEYS = {
   showRefreshToken: "panel.show_refresh_token",
   oauthClientId: "panel.oauth_client_id",
   oauthRedirectUri: "panel.oauth_redirect_uri",
+  oauthPriorityMode: "panel.oauth_priority_mode",
+  oauthPriorityValue: "panel.oauth_priority_value",
+  autoRefreshMaxDays: "panel.auto_refresh_max_days",
+  autoRefreshAt: "panel.auto_refresh_at",
+  /** The local date (YYYY-MM-DD) the sweep last ran, so a restart cannot repeat it. */
+  autoRefreshLastRun: "panel.auto_refresh_last_run",
 } as const;
 
 /** Bounds exist so a typo cannot set a one-second poll hammering Microsoft for an hour. */
@@ -55,7 +78,20 @@ export const LIMITS = {
   pollDurationMinutes: { min: 1, max: 60 },
   pollIntervalSeconds: { min: 5, max: 600 },
   leaseMinutes: { min: 1, max: 1440 },
+  // Zero is the off switch, so this one is not clamped up to its minimum like the others.
+  autoRefreshMaxDays: { min: 0, max: 365 },
 } as const;
+
+/** `HH:MM` on a 24-hour clock, or null when it is not a time at all. */
+export function parseTimeOfDay(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const match = /^(\d{1,2}):(\d{2})$/.exec(value.trim());
+  if (!match) return null;
+  const hours = Number(match[1]);
+  const minutes = Number(match[2]);
+  if (hours > 23 || minutes > 59) return null;
+  return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}`;
+}
 
 function clamp(value: number, { min, max }: { min: number; max: number }): number {
   return Math.min(max, Math.max(min, Math.round(value)));
@@ -69,6 +105,16 @@ function readNumber(key: string, fallback: number, bounds: { min: number; max: n
 function readString(key: string, fallback: string): string {
   const raw = getSetting(key);
   return typeof raw === "string" ? raw : fallback;
+}
+
+function readDays(key: string, fallback: number): number {
+  const raw = Number(getSetting(key));
+  return Number.isFinite(raw) && raw >= 0 ? clamp(raw, LIMITS.autoRefreshMaxDays) : fallback;
+}
+
+function readPriority(key: string, fallback: number): number {
+  const raw = Number(getSetting(key));
+  return Number.isFinite(raw) ? clampPriority(Math.trunc(raw)) : fallback;
 }
 
 function readBoolean(key: string, fallback: boolean): boolean {
@@ -99,6 +145,21 @@ export function getPanelSettings(): PanelSettings {
     showRefreshToken: readBoolean(KEYS.showRefreshToken, DEFAULT_PANEL_SETTINGS.showRefreshToken),
     oauthClientId: readString(KEYS.oauthClientId, DEFAULT_PANEL_SETTINGS.oauthClientId),
     oauthRedirectUri: readString(KEYS.oauthRedirectUri, DEFAULT_PANEL_SETTINGS.oauthRedirectUri),
+    oauthPriorityMode:
+      parseOauthPriorityMode(getSetting(KEYS.oauthPriorityMode)) ??
+      DEFAULT_PANEL_SETTINGS.oauthPriorityMode,
+    // Not readNumber: a priority is legitimately zero or negative, which that rejects.
+    oauthPriorityValue: readPriority(
+      KEYS.oauthPriorityValue,
+      DEFAULT_PANEL_SETTINGS.oauthPriorityValue,
+    ),
+    // Not readNumber: zero is the off switch, and that treats zero as "unset".
+    autoRefreshMaxDays: readDays(
+      KEYS.autoRefreshMaxDays,
+      DEFAULT_PANEL_SETTINGS.autoRefreshMaxDays,
+    ),
+    autoRefreshAt:
+      parseTimeOfDay(getSetting(KEYS.autoRefreshAt)) ?? DEFAULT_PANEL_SETTINGS.autoRefreshAt,
   };
 }
 
@@ -136,5 +197,30 @@ export function savePanelSettings(patch: Partial<PanelSettings>): PanelSettings 
   if (typeof patch.oauthRedirectUri === "string") {
     setSetting(KEYS.oauthRedirectUri, patch.oauthRedirectUri.trim());
   }
+  if (typeof patch.autoRefreshMaxDays === "number" && Number.isFinite(patch.autoRefreshMaxDays)) {
+    setSetting(
+      KEYS.autoRefreshMaxDays,
+      String(clamp(Math.max(0, patch.autoRefreshMaxDays), LIMITS.autoRefreshMaxDays)),
+    );
+  }
+  const at = parseTimeOfDay(patch.autoRefreshAt);
+  if (at) setSetting(KEYS.autoRefreshAt, at);
+  const mode = parseOauthPriorityMode(patch.oauthPriorityMode);
+  if (mode) setSetting(KEYS.oauthPriorityMode, mode);
+  if (typeof patch.oauthPriorityValue === "number" && Number.isFinite(patch.oauthPriorityValue)) {
+    setSetting(
+      KEYS.oauthPriorityValue,
+      String(clampPriority(Math.trunc(patch.oauthPriorityValue))),
+    );
+  }
   return getPanelSettings();
+}
+
+/** The local date the sweep last ran, as `YYYY-MM-DD`, or "" when it never has. */
+export function getAutoRefreshLastRun(): string {
+  return getSetting(KEYS.autoRefreshLastRun) ?? "";
+}
+
+export function setAutoRefreshLastRun(date: string): void {
+  setSetting(KEYS.autoRefreshLastRun, date);
 }

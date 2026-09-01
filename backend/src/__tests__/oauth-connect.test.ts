@@ -47,13 +47,14 @@ function okToken(email: string, refreshToken = "rt-fresh") {
 let server: Server;
 let base: string;
 let getAccountByEmail: typeof import("../db/accounts").getAccountByEmail;
+let listAccounts: typeof import("../db/accounts").listAccounts;
 let resetFlows: typeof import("../auth/oauthFlowStore").resetFlows;
 let savePanelSettings: typeof import("../db/panelSettings").savePanelSettings;
 
 beforeAll(async () => {
   const express = (await import("express")).default;
   const oauth = (await import("../routes/oauth")).default;
-  ({ getAccountByEmail } = await import("../db/accounts"));
+  ({ getAccountByEmail, listAccounts } = await import("../db/accounts"));
   ({ resetFlows } = await import("../auth/oauthFlowStore"));
   ({ savePanelSettings } = await import("../db/panelSettings"));
 
@@ -74,8 +75,18 @@ beforeEach(() => {
   resetFlows();
   tokenResponse.mockReset();
   delete process.env.OAUTH_CLIENT_ID;
-  savePanelSettings({ oauthClientId: "", oauthRedirectUri: "" });
+  savePanelSettings({
+    oauthClientId: "",
+    oauthRedirectUri: "",
+    oauthPriorityMode: "normal",
+    oauthPriorityValue: 0,
+  });
 });
+
+/** Total rows, so a duplicate shows up as a count rather than by inference. */
+function countAccounts(): number {
+  return listAccounts().length;
+}
 
 async function start(body: Record<string, unknown>) {
   const response = await fetch(`${base}/api/oauth/start`, {
@@ -188,6 +199,42 @@ describe("GET /api/oauth/callback", () => {
     expect(second?.refreshToken).toBe("rt-two");
   });
 
+  // The address is the identity of a row, so the same mailbox must never become two of them
+  it("updates the row when the address was stored in a different case", async () => {
+    // Written straight to the table, the way a version before addresses were normalised
+    // would have left it. Going through upsertAccount would fold the case on the way in and
+    // so prove nothing.
+    const { db } = await import("../db/database");
+    db.prepare(
+      `INSERT INTO accounts (email, client_id, refresh_token, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?)`,
+    ).run("MixedCase@Example.com", "old-cid", "rt-old", Date.now(), Date.now());
+    const before = countAccounts();
+
+    tokenResponse.mockReturnValue(okToken("mixedcase@example.com", "rt-connected"));
+    const { status } = await callback(`code=c&state=${await stateFor("MixedCase@Example.com")}`);
+
+    expect(status).toBe(200);
+    expect(countAccounts()).toBe(before);
+    const stored = getAccountByEmail("mixedcase@example.com");
+    expect(stored?.refreshToken).toBe("rt-connected");
+    // Folded to the canonical form, so the next writer of either casing finds this row
+    expect(stored?.email).toBe("mixedcase@example.com");
+    expect(getAccountByEmail("MIXEDCASE@EXAMPLE.COM")?.id).toBe(stored?.id);
+  });
+
+  it("does not add a second row when the same mailbox is connected twice", async () => {
+    tokenResponse.mockReturnValue(okToken("twice@example.com", "rt-1"));
+    await callback(`code=c1&state=${await stateFor("twice@example.com")}`);
+    const after_first = countAccounts();
+
+    tokenResponse.mockReturnValue(okToken("twice@example.com", "rt-2"));
+    await callback(`code=c2&state=${await stateFor("Twice@Example.com")}`);
+
+    expect(countAccounts()).toBe(after_first);
+    expect(getAccountByEmail("twice@example.com")?.refreshToken).toBe("rt-2");
+  });
+
   it("stores nothing when a different mailbox signed in", async () => {
     const state = await stateFor("wanted@example.com");
     tokenResponse.mockReturnValue(okToken("someone-else@example.com"));
@@ -238,5 +285,87 @@ describe("GET /api/oauth/callback", () => {
     const { html } = await callback("error=%3Cimg+src%3Dx+onerror%3Dalert(1)%3E");
     expect(html).not.toContain("<img src=x");
     expect(html).toContain("&lt;img");
+  });
+});
+
+/**
+ * Where a freshly connected mailbox lands in the queue. Seeded with a pool spanning a known
+ * range so "highest" and "lowest" have something to be relative to.
+ */
+describe("the priority a connected account takes", () => {
+  let seq = 0;
+  /** A fresh address each time, so every case exercises the "added" path. */
+  const fresh = () => `new-${++seq}@example.com`;
+
+  async function connect(email: string) {
+    tokenResponse.mockReturnValue(okToken(email));
+    const { status } = await callback(`code=c&state=${await stateFor(email)}`);
+    expect(status).toBe(200);
+    return getAccountByEmail(email)!;
+  }
+
+  beforeEach(async () => {
+    const { upsertAccount, setPriority, deleteAccounts } = await import("../db/accounts");
+    deleteAccounts(listAccounts().map((a) => a.id));
+    for (const [email, priority] of [
+      ["low@example.com", -5],
+      ["mid@example.com", 0],
+      ["high@example.com", 7],
+    ] as const) {
+      const row = upsertAccount({ email, clientId: "c", refreshToken: "t" });
+      setPriority([row.id], priority);
+    }
+  });
+
+  it("leaves it at the default rank by default", async () => {
+    expect((await connect(fresh())).priority).toBe(0);
+  });
+
+  it("puts it one above the highest", async () => {
+    savePanelSettings({ oauthPriorityMode: "highestPlusOne" });
+    expect((await connect(fresh())).priority).toBe(8);
+  });
+
+  it("ties it with the highest", async () => {
+    savePanelSettings({ oauthPriorityMode: "highest" });
+    expect((await connect(fresh())).priority).toBe(7);
+  });
+
+  it("ties it with the lowest", async () => {
+    savePanelSettings({ oauthPriorityMode: "lowest" });
+    expect((await connect(fresh())).priority).toBe(-5);
+  });
+
+  it("puts it one below the lowest", async () => {
+    savePanelSettings({ oauthPriorityMode: "lowestMinusOne" });
+    expect((await connect(fresh())).priority).toBe(-6);
+  });
+
+  it("takes the figure given for a fixed rank", async () => {
+    savePanelSettings({ oauthPriorityMode: "fixed", oauthPriorityValue: 42 });
+    expect((await connect(fresh())).priority).toBe(42);
+  });
+
+  // A rank is bounded, so a pool already at the ceiling ties with it rather than overflowing
+  it("clamps rather than running past the ends of the scale", async () => {
+    const { upsertAccount, setPriority } = await import("../db/accounts");
+    const top = upsertAccount({ email: "top@example.com", clientId: "c", refreshToken: "t" });
+    setPriority([top.id], 99);
+
+    savePanelSettings({ oauthPriorityMode: "highestPlusOne" });
+    expect((await connect(fresh())).priority).toBe(99);
+
+    savePanelSettings({ oauthPriorityMode: "fixed", oauthPriorityValue: 5000 });
+    expect((await connect(fresh())).priority).toBe(99);
+  });
+
+  // Someone moved that row deliberately; a token refresh is no reason to undo it
+  it("leaves an existing account's priority alone on a reconnect", async () => {
+    const { setPriority } = await import("../db/accounts");
+    const existing = getAccountByEmail("mid@example.com")!;
+    setPriority([existing.id], 33);
+
+    savePanelSettings({ oauthPriorityMode: "highestPlusOne" });
+    expect((await connect("mid@example.com")).priority).toBe(33);
   });
 });

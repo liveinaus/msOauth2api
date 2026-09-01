@@ -15,13 +15,14 @@
  * mailbox on both ends.
  */
 import { adminSnapshot, restoreAdminSnapshot, type AdminSnapshot } from "../auth/credentials";
-import { parseAuthType, parsePriority, type AuthType } from "../types";
+import { parseAuthType, parseOauthPriorityMode, parsePriority, type AuthType } from "../types";
 import { listAccounts } from "./accounts";
 import { encryptSecret } from "./crypto";
 import { db } from "./database";
 import {
   DEFAULT_PANEL_SETTINGS,
   getPanelSettings,
+  parseTimeOfDay,
   savePanelSettings,
   type PanelSettings,
 } from "./panelSettings";
@@ -439,6 +440,11 @@ function parsePanel(value: unknown): PanelSettings {
     showRefreshToken: row.showRefreshToken === true,
     oauthClientId: text(row.oauthClientId),
     oauthRedirectUri: text(row.oauthRedirectUri),
+    oauthPriorityMode:
+      parseOauthPriorityMode(row.oauthPriorityMode) ?? DEFAULT_PANEL_SETTINGS.oauthPriorityMode,
+    oauthPriorityValue: number("oauthPriorityValue", DEFAULT_PANEL_SETTINGS.oauthPriorityValue),
+    autoRefreshMaxDays: number("autoRefreshMaxDays", DEFAULT_PANEL_SETTINGS.autoRefreshMaxDays),
+    autoRefreshAt: parseTimeOfDay(row.autoRefreshAt) ?? DEFAULT_PANEL_SETTINGS.autoRefreshAt,
   };
 }
 

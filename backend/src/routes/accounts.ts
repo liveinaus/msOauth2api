@@ -7,6 +7,7 @@ import {
   markCopied,
   clearRefreshError,
   nextTopPriority,
+  normaliseEmail,
   recordRefresh,
   recordUsage,
   setAuthType,
@@ -29,15 +30,21 @@ import { requireAuth } from "../middleware/auth";
 import { ImapTemporaryError, ImapUnavailableError } from "../services/imap";
 import { forgetAccount, noteAccountFailure, noteAccountSuccess } from "../services/accountHealth";
 import { pickForPanel, readFolders } from "../services/mail";
-import {
-  exchangeRefreshToken,
-  isGrantFailure,
-  OAuthError,
-  refreshScopeFor,
-} from "../services/oauth";
+import { isGrantFailure, OAuthError } from "../services/oauth";
+import { refreshAccounts } from "../services/tokenRefresh";
 import { findForType, rulesFor } from "../services/typeRules";
 import { noteUsage } from "../services/usage";
-import { AUTH_TYPES, parseAuthType, parsePriority, type Account, type AuthType } from "../types";
+import {
+  AUTH_TYPES,
+  DEFAULT_ACCOUNT_SORT,
+  DEFAULT_SORT_DIR,
+  parseAccountSort,
+  parseAuthType,
+  parsePriority,
+  parseSortDir,
+  type Account,
+  type AuthType,
+} from "../types";
 
 const router = Router();
 
@@ -92,10 +99,18 @@ function publicById(id: number) {
   return account ? toPublic(account) : null;
 }
 
-router.get("/", (_req, res) => {
+/**
+ * `sort` and `dir` are read here rather than sorted in the browser so the order is the
+ * server's: the panel pages the list, and a page taken from a differently ordered list is a
+ * different set of rows. Anything unrecognised falls back to the default rather than
+ * erroring, so a stale bookmark still renders.
+ */
+router.get("/", (req, res) => {
+  const sort = parseAccountSort(req.query.sort) ?? DEFAULT_ACCOUNT_SORT;
+  const dir = parseSortDir(req.query.dir) ?? DEFAULT_SORT_DIR;
   // One query for every account's usage rows, rather than one per row.
   const usages = listUsagesByAccount();
-  res.json(listAccounts().map((account) => toPublic(account, usages[account.id] ?? [])));
+  res.json(listAccounts(sort, dir).map((account) => toPublic(account, usages[account.id] ?? [])));
 });
 
 router.post("/", (req, res) => {
@@ -119,7 +134,7 @@ router.post("/", (req, res) => {
   }
 
   const account = upsertAccount({
-    email: email.trim(),
+    email: normaliseEmail(email),
     password: typeof password === "string" ? password : null,
     clientId: clientId.trim(),
     refreshToken: refreshToken.trim(),
@@ -225,7 +240,10 @@ router.post("/import", (req, res) => {
       return;
     }
 
-    const [email, password, clientId, refreshToken] = fields;
+    const [rawEmail, password, clientId, refreshToken] = fields;
+    // Normalised with the row it keys, so a file written in mixed case updates the address
+    // the panel already holds instead of adding a second row for the same mailbox.
+    const email = rawEmail ? normaliseEmail(rawEmail) : rawEmail;
     if (!email || !clientId || !refreshToken) {
       errors.push({
         line: index + 1,
@@ -300,7 +318,7 @@ router.patch("/:id", (req, res) => {
 
   const updated = updateAccount(id, {
     priority: priority === undefined ? undefined : (parsePriority(priority) ?? undefined),
-    email: typeof email === "string" ? email.trim() : undefined,
+    email: typeof email === "string" ? normaliseEmail(email) : undefined,
     password: typeof password === "string" ? password : undefined,
     clientId: typeof clientId === "string" ? clientId.trim() : undefined,
     refreshToken:
@@ -581,41 +599,7 @@ router.post("/refresh", async (req, res) => {
       ? (ids as number[]).map((id) => getAccount(id)).filter((a): a is Account => Boolean(a))
       : listAccounts().filter((a) => !a.disabled);
 
-  const results: { id: number; email: string; ok: boolean; error?: string }[] = [];
-  const CONCURRENCY = 3;
-
-  for (let i = 0; i < targets.length; i += CONCURRENCY) {
-    const batch = targets.slice(i, i + CONCURRENCY);
-    await Promise.all(
-      batch.map(async (account) => {
-        try {
-          const token = await exchangeRefreshToken(
-            account.refreshToken,
-            account.clientId,
-            refreshScopeFor(account.authType),
-          );
-          recordRefresh(account.id, token.refreshToken, null);
-          noteAccountSuccess(account.id);
-          results.push({ id: account.id, email: account.email, ok: true });
-        } catch (error) {
-          const detail =
-            error instanceof OAuthError
-              ? error.details.slice(0, 500)
-              : error instanceof Error
-                ? error.message
-                : String(error);
-          // The result still reports the failure; what is withheld is marking the account
-          // for it. A batch run happens to catch every network hiccup and every throttled
-          // reply at once, which is how a panel full of working accounts ended up wearing
-          // warning badges.
-          if (isGrantFailure(error) && noteAccountFailure(account.id)) {
-            recordRefresh(account.id, null, detail);
-          }
-          results.push({ id: account.id, email: account.email, ok: false, error: detail });
-        }
-      }),
-    );
-  }
+  const results = await refreshAccounts(targets);
 
   res.json({
     total: results.length,

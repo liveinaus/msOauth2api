@@ -1,6 +1,7 @@
 import { Router } from "express";
-import { getPanelSettings, savePanelSettings } from "../db/panelSettings";
+import { getPanelSettings, parseTimeOfDay, savePanelSettings } from "../db/panelSettings";
 import { requireAuth } from "../middleware/auth";
+import { parseOauthPriorityMode } from "../types";
 
 const router = Router();
 
@@ -28,6 +29,12 @@ router.put("/", (req, res) => {
       oauthClientId: typeof body.oauthClientId === "string" ? body.oauthClientId : undefined,
       oauthRedirectUri:
         typeof body.oauthRedirectUri === "string" ? body.oauthRedirectUri : undefined,
+      oauthPriorityMode: parseOauthPriorityMode(body.oauthPriorityMode) ?? undefined,
+      oauthPriorityValue:
+        typeof body.oauthPriorityValue === "number" ? body.oauthPriorityValue : undefined,
+      autoRefreshMaxDays:
+        typeof body.autoRefreshMaxDays === "number" ? body.autoRefreshMaxDays : undefined,
+      autoRefreshAt: parseTimeOfDay(body.autoRefreshAt) ?? undefined,
     }),
   );
 });

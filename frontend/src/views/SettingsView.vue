@@ -80,6 +80,51 @@
       </div>
 
       <div class="form-group">
+        <label class="form-label">{{ t("settings.oauthPriority") }}</label>
+        <select v-model="panel.oauthPriorityMode" class="form-input">
+          <option value="normal">{{ t("settings.oauthPriorityNormal") }}</option>
+          <option value="highestPlusOne">{{ t("settings.oauthPriorityHighestPlusOne") }}</option>
+          <option value="highest">{{ t("settings.oauthPriorityHighest") }}</option>
+          <option value="lowest">{{ t("settings.oauthPriorityLowest") }}</option>
+          <option value="lowestMinusOne">{{ t("settings.oauthPriorityLowestMinusOne") }}</option>
+          <option value="fixed">{{ t("settings.oauthPriorityFixed") }}</option>
+        </select>
+        <input
+          v-if="panel.oauthPriorityMode === 'fixed'"
+          v-model.number="panel.oauthPriorityValue"
+          class="form-input"
+          type="number"
+          :min="-99"
+          :max="99"
+          style="margin-top: 6px"
+        />
+        <p class="hint">{{ t("settings.oauthPriorityHint") }}</p>
+      </div>
+
+      <div class="form-row">
+        <div class="form-group">
+          <label class="form-label">{{ t("settings.autoRefreshMaxDays") }}</label>
+          <input
+            v-model.number="panel.autoRefreshMaxDays"
+            class="form-input"
+            type="number"
+            min="0"
+            max="365"
+          />
+        </div>
+        <div class="form-group">
+          <label class="form-label">{{ t("settings.autoRefreshAt") }}</label>
+          <input
+            v-model="panel.autoRefreshAt"
+            class="form-input"
+            type="time"
+            :disabled="!panel.autoRefreshMaxDays"
+          />
+        </div>
+      </div>
+      <p class="hint">{{ t("settings.autoRefreshHint") }}</p>
+
+      <div class="form-group">
         <label class="check-row">
           <input v-model="panel.showClientId" type="checkbox" />
           {{ t("settings.showClientId") }}

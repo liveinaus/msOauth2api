@@ -7,6 +7,11 @@ import {
   PRIORITY_MIN,
   type Account,
   type AuthType,
+  type OauthPriorityMode,
+  type AccountSort,
+  type SortDir,
+  DEFAULT_ACCOUNT_SORT,
+  DEFAULT_SORT_DIR,
 } from "../types";
 
 type AccountRow = {
@@ -59,8 +64,42 @@ function toAccount(row: AccountRow): Account {
   };
 }
 
-export function listAccounts(): Account[] {
-  const rows = db.prepare("SELECT * FROM accounts ORDER BY id ASC").all() as AccountRow[];
+/**
+ * The SQL each sortable column maps to. Nothing else may reach the ORDER BY.
+ *
+ * `status` is not a column: a row is "bad" when it is disabled or its last refresh failed,
+ * and the panel shows those together, so the sort follows what is on screen rather than the
+ * storage. Email folds case, or `Zoe` would sort before `adam`.
+ */
+const SORT_SQL: Record<AccountSort, string> = {
+  id: "id",
+  priority: "priority",
+  email: "email COLLATE NOCASE",
+  clientId: "client_id COLLATE NOCASE",
+  status: "(disabled = 1 OR last_refresh_error IS NOT NULL)",
+  lastRefreshAt: "last_refresh_at",
+  lastUsedAt: "last_used_at",
+};
+
+/**
+ * Every account, ordered by the server.
+ *
+ * Two details the panel depends on. A row that has never been refreshed or used holds NULL
+ * there, and those sort last whichever way the column is turned -- "no date" is not an
+ * early date, and burying them under the rows that do have one is what an operator wants
+ * either way. And `id` always breaks a tie, so a page boundary cannot show one row twice and
+ * skip another when several share a priority.
+ */
+export function listAccounts(
+  sort: AccountSort = DEFAULT_ACCOUNT_SORT,
+  dir: SortDir = DEFAULT_SORT_DIR,
+): Account[] {
+  const column = SORT_SQL[sort] ?? SORT_SQL[DEFAULT_ACCOUNT_SORT];
+  const direction = dir === "asc" ? "ASC" : "DESC";
+  const nullsLast = sort === "lastRefreshAt" || sort === "lastUsedAt" ? `${column} IS NULL, ` : "";
+  const rows = db
+    .prepare(`SELECT * FROM accounts ORDER BY ${nullsLast}${column} ${direction}, id ASC`)
+    .all() as AccountRow[];
   return rows.map(toAccount);
 }
 
@@ -69,9 +108,45 @@ export function getAccount(id: number): Account | undefined {
   return row ? toAccount(row) : undefined;
 }
 
+/**
+ * The canonical form of an address: trimmed and lower-cased.
+ *
+ * Addresses reach this panel from someone typing into the form, from an import file and from
+ * the OAuth callback, and a mailbox is the same mailbox however it is capitalised. Without
+ * one agreed form `John@x.com` and `john@x.com` become two rows -- the UNIQUE index on
+ * `email` collates BINARY, so SQLite considers them different -- and the pool then hands out
+ * both, one of them carrying a refresh token that Microsoft invalidated when the other was
+ * connected.
+ */
+export function normaliseEmail(email: string): string {
+  return email.trim().toLowerCase();
+}
+
+/**
+ * Addresses that differ only in case, which are the same mailbox held as two rows.
+ *
+ * Only rows written before addresses were normalised can be like this, and they are not
+ * merged automatically: the two carry different refresh tokens and picking a survivor would
+ * throw one away. Reported at startup so an operator can delete the stale one.
+ */
+export function caseDuplicateEmails(): string[][] {
+  const rows = db
+    .prepare(
+      `SELECT GROUP_CONCAT(email, '\n') AS emails
+         FROM accounts
+        GROUP BY LOWER(email)
+       HAVING COUNT(*) > 1`,
+    )
+    .all() as Array<{ emails: string }>;
+  return rows.map((row) => row.emails.split("\n"));
+}
+
 export function getAccountByEmail(email: string): Account | undefined {
-  const row = db.prepare("SELECT * FROM accounts WHERE email = ?").get(email) as
-    AccountRow | undefined;
+  // NOCASE on top of the normalised argument, so a row written in mixed case before this was
+  // enforced is still found -- and so updated -- rather than duplicated alongside.
+  const row = db
+    .prepare("SELECT * FROM accounts WHERE email = ? COLLATE NOCASE")
+    .get(normaliseEmail(email)) as AccountRow | undefined;
   return row ? toAccount(row) : undefined;
 }
 
@@ -88,11 +163,13 @@ export function getAccountByEmail(email: string): Account | undefined {
  */
 export function upsertAccount(input: AccountInput): Account {
   const now = Date.now();
-  const existing = getAccountByEmail(input.email);
+  const email = normaliseEmail(input.email);
+  const existing = getAccountByEmail(email);
 
   if (existing) {
     db.prepare(
       `UPDATE accounts SET
+         email         = @email,
          password      = @password,
          client_id     = @clientId,
          refresh_token = @refreshToken,
@@ -103,6 +180,7 @@ export function upsertAccount(input: AccountInput): Account {
        WHERE id = @id`,
     ).run({
       id: existing.id,
+      email,
       password: input.password ? encryptSecret(input.password) : null,
       clientId: input.clientId,
       refreshToken: encryptSecret(input.refreshToken),
@@ -131,7 +209,7 @@ export function upsertAccount(input: AccountInput): Account {
        remark        = COALESCE(excluded.remark, accounts.remark),
        updated_at    = excluded.updated_at`,
   ).run({
-    email: input.email,
+    email,
     password: input.password ? encryptSecret(input.password) : null,
     clientId: input.clientId,
     refreshToken: encryptSecret(input.refreshToken),
@@ -142,7 +220,7 @@ export function upsertAccount(input: AccountInput): Account {
   });
 
   // Non-null: the statement above either inserted this address or updated it.
-  return getAccountByEmail(input.email)!;
+  return getAccountByEmail(email)!;
 }
 
 export function updateAccount(
@@ -260,6 +338,56 @@ export function adjustPriority(ids: number[], delta: number): number {
  * climbing over the one before it. An empty table starts at 1, and a pool already at the
  * ceiling stays there, which ties with the existing top rather than failing the import.
  */
+/**
+ * The rank a newly connected account should take, or undefined to leave it at the default.
+ *
+ * Read at the moment the account is stored rather than when the setting is saved: "one above
+ * the highest" has to mean the highest as the pool stands now, not as it stood whenever an
+ * operator last opened Settings. An empty pool reads as 0, so the relative modes still give a
+ * sensible first rank.
+ */
+export function priorityForMode(mode: OauthPriorityMode, fixedValue: number): number | undefined {
+  if (mode === "normal") return undefined;
+  if (mode === "fixed") return clampPriority(fixedValue);
+
+  const row = db
+    .prepare("SELECT MAX(priority) AS top, MIN(priority) AS bottom FROM accounts")
+    .get() as { top: number | null; bottom: number | null } | undefined;
+  const top = row?.top ?? 0;
+  const bottom = row?.bottom ?? 0;
+
+  switch (mode) {
+    case "highestPlusOne":
+      return clampPriority(top + 1);
+    case "highest":
+      return clampPriority(top);
+    case "lowest":
+      return clampPriority(bottom);
+    case "lowestMinusOne":
+      return clampPriority(bottom - 1);
+  }
+}
+
+/**
+ * Accounts whose token has not been refreshed within `maxDays`, for the nightly sweep.
+ *
+ * A row that has never been refreshed counts as stale: it holds whatever token was imported
+ * or consented, of unknown age. Disabled rows are left alone -- an operator switched those
+ * off, and refreshing one would put it back in circulation as far as Microsoft is concerned.
+ */
+export function accountsNeedingRefresh(maxDays: number, now = Date.now()): Account[] {
+  const cutoff = now - maxDays * 24 * 60 * 60 * 1000;
+  const rows = db
+    .prepare(
+      `SELECT * FROM accounts
+        WHERE disabled = 0
+          AND (last_refresh_at IS NULL OR last_refresh_at < ?)
+        ORDER BY (last_refresh_at IS NOT NULL), last_refresh_at ASC, id ASC`,
+    )
+    .all(cutoff) as AccountRow[];
+  return rows.map(toAccount);
+}
+
 export function nextTopPriority(): number {
   const row = db.prepare("SELECT MAX(priority) AS top FROM accounts").get() as {
     top: number | null;

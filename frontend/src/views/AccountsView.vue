@@ -86,15 +86,27 @@
               <input type="checkbox" :checked="allVisibleSelected" @change="toggleAll" />
             </th>
             <th class="seq-cell">{{ t("accounts.seq") }}</th>
-            <th class="seq-cell" :title="t('accounts.priorityHint')">{{ t("accounts.priority") }}</th>
-            <th>{{ t("accounts.email") }}</th>
+            <th class="seq-cell sortable" :title="t('accounts.priorityHint')" @click="sortBy('priority')">
+              {{ t("accounts.priority") }}{{ sortMark("priority") }}
+            </th>
+            <th class="sortable" @click="sortBy('email')">
+              {{ t("accounts.email") }}{{ sortMark("email") }}
+            </th>
             <th class="code-cell">{{ t("accounts.code") }}</th>
-            <th v-if="panel.showClientId">{{ t("accounts.clientId") }}</th>
+            <th v-if="panel.showClientId" class="sortable" @click="sortBy('clientId')">
+              {{ t("accounts.clientId") }}{{ sortMark("clientId") }}
+            </th>
             <th v-if="panel.showRefreshToken">{{ t("accounts.token") }}</th>
             <th>{{ t("accounts.usedFor") }}</th>
-            <th>{{ t("accounts.status") }}</th>
-            <th>{{ t("accounts.lastRefresh") }}</th>
-            <th>{{ t("accounts.lastUsed") }}</th>
+            <th class="sortable" @click="sortBy('status')">
+              {{ t("accounts.status") }}{{ sortMark("status") }}
+            </th>
+            <th class="sortable" @click="sortBy('lastRefreshAt')">
+              {{ t("accounts.lastRefresh") }}{{ sortMark("lastRefreshAt") }}
+            </th>
+            <th class="sortable" @click="sortBy('lastUsedAt')">
+              {{ t("accounts.lastUsed") }}{{ sortMark("lastUsedAt") }}
+            </th>
             <th>{{ t("common.actions") }}</th>
           </tr>
         </thead>
@@ -492,11 +504,13 @@ import {
   setAccountUsage,
   updateAccount,
   DEFAULT_PANEL_SETTINGS,
+  type AccountSort,
   type AccountUsageView,
   type AccountView,
   type AuthType,
   type MailMessage,
   type PanelSettings,
+  type SortDir,
   type UsageTypeView,
 } from "../api/client";
 import { t } from "../i18n";
@@ -627,12 +641,34 @@ const filtered = computed(() => {
 });
 
 /**
- * Ordered the way the pool hands addresses out, so the top of the table is what the API will
- * spend next. Ties keep id order, which leaves an unmarked list looking exactly as before.
+ * The server decides the order and the filter preserves it, so nothing is sorted here. The
+ * default it serves -- priority first, then id -- is the order the pool hands addresses out
+ * in, so the top of an unsorted table is still what the API will spend next.
  */
-const ordered = computed(() => [...filtered.value].sort((a, b) => b.priority - a.priority || a.id - b.id));
+const sort = ref<AccountSort>("priority");
+const sortDir = ref<SortDir>("desc");
 
-const pageItems = computed(() => pageSlice(ordered.value, page.value, pageSize.value));
+/** A column's own natural first click: dates and ranks read high-to-low, text A to Z. */
+const DESC_FIRST: AccountSort[] = ["priority", "status", "lastRefreshAt", "lastUsedAt"];
+
+function sortBy(key: AccountSort): void {
+  if (sort.value === key) {
+    sortDir.value = sortDir.value === "asc" ? "desc" : "asc";
+  } else {
+    sort.value = key;
+    sortDir.value = DESC_FIRST.includes(key) ? "desc" : "asc";
+  }
+  page.value = 1;
+  void load();
+}
+
+/** The arrow on a header, blank unless the table is ordered by it. */
+function sortMark(key: AccountSort): string {
+  if (sort.value !== key) return "";
+  return sortDir.value === "asc" ? " \u2191" : " \u2193";
+}
+
+const pageItems = computed(() => pageSlice(filtered.value, page.value, pageSize.value));
 
 const allVisibleSelected = computed(
   () => pageItems.value.length > 0 && pageItems.value.every((a) => selected.value.has(a.id)),
@@ -654,7 +690,7 @@ async function load(): Promise<void> {
   loading.value = true;
   error.value = "";
   try {
-    accounts.value = await fetchAccounts();
+    accounts.value = await fetchAccounts(sort.value, sortDir.value);
   } catch (err) {
     error.value = errorMessage(err, "Could not load accounts");
   } finally {

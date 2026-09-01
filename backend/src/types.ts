@@ -37,6 +37,70 @@ export function clampPriority(value: number): number {
   return Math.min(PRIORITY_MAX, Math.max(PRIORITY_MIN, value));
 }
 
+/**
+ * Where an account connected through the OAuth callback lands in the queue.
+ *
+ * Relative to what is already in the pool, rather than a bare number, because that is how the
+ * question is actually asked: a freshly connected mailbox is usually wanted either ahead of
+ * everything or behind it, and what "ahead" means changes as the pool does. "normal" leaves
+ * the row at the default rank, which is what happened before this was configurable.
+ */
+export const OAUTH_PRIORITY_MODES = [
+  "normal",
+  "highestPlusOne",
+  "highest",
+  "lowest",
+  "lowestMinusOne",
+  "fixed",
+] as const;
+
+export type OauthPriorityMode = (typeof OAUTH_PRIORITY_MODES)[number];
+
+export function parseOauthPriorityMode(value: unknown): OauthPriorityMode | null {
+  const normalised = typeof value === "string" ? value.trim() : "";
+  return OAUTH_PRIORITY_MODES.includes(normalised as OauthPriorityMode)
+    ? (normalised as OauthPriorityMode)
+    : null;
+}
+
+/**
+ * Columns the account list can be ordered by.
+ *
+ * An allow-list rather than a column name off the query string: the value reaches an ORDER
+ * BY clause, which is one of the few places a prepared statement cannot parameterise.
+ *
+ * The verification code and the usage labels are not here. Both come from the usages table,
+ * one row per type, so there is no single value per account to order by -- an address used
+ * for three types would have three.
+ */
+export const ACCOUNT_SORT_KEYS = [
+  "id",
+  "priority",
+  "email",
+  "clientId",
+  "status",
+  "lastRefreshAt",
+  "lastUsedAt",
+] as const;
+
+export type AccountSort = (typeof ACCOUNT_SORT_KEYS)[number];
+
+export type SortDir = "asc" | "desc";
+
+/** The order the panel has always shown: keenest first, then oldest row first. */
+export const DEFAULT_ACCOUNT_SORT: AccountSort = "priority";
+export const DEFAULT_SORT_DIR: SortDir = "desc";
+
+export function parseAccountSort(value: unknown): AccountSort | null {
+  const normalised = typeof value === "string" ? value.trim() : "";
+  return ACCOUNT_SORT_KEYS.includes(normalised as AccountSort) ? (normalised as AccountSort) : null;
+}
+
+export function parseSortDir(value: unknown): SortDir | null {
+  const normalised = typeof value === "string" ? value.trim().toLowerCase() : "";
+  return normalised === "asc" || normalised === "desc" ? normalised : null;
+}
+
 /** A stored mail account. Secrets are decrypted by the time a caller sees this. */
 export type Account = {
   id: number;

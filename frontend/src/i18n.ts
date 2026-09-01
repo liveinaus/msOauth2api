@@ -234,6 +234,19 @@ const en = {
     oauthClientId: "OAuth client id",
     oauthClientIdHint:
       "Application (client) id used when connecting a mailbox. Must be a public client registered for personal Microsoft accounts. Falls back to OAUTH_CLIENT_ID.",
+    autoRefreshMaxDays: "Refresh tokens older than (days)",
+    autoRefreshAt: "Check at",
+    autoRefreshHint:
+      "Once a day the panel refreshes any token that has not been refreshed within this many days, oldest first. Zero turns it off. A token never refreshed counts as stale; disabled accounts are left alone. A window missed while the container was down is caught up on the next start, but switching this on part way through a day waits until the next one -- use the Refresh tokens button if you want it now.",
+    oauthPriority: "Priority for connected accounts",
+    oauthPriorityNormal: "Normal (0)",
+    oauthPriorityHighestPlusOne: "Ahead of everything (highest + 1)",
+    oauthPriorityHighest: "Level with the highest",
+    oauthPriorityLowest: "Level with the lowest",
+    oauthPriorityLowestMinusOne: "Behind everything (lowest - 1)",
+    oauthPriorityFixed: "A fixed rank",
+    oauthPriorityHint:
+      "Where a mailbox connected through the callback lands in the pool queue, worked out against the pool as it stands at that moment. Applies only to accounts the flow adds: reconnecting one already on the panel leaves its priority alone. Ranks are capped at -99 to 99.",
     oauthRedirectUri: "OAuth redirect URI",
     oauthRedirectUriHint:
       "Must match a redirect URI on the app registration exactly, and use https unless the host is localhost. Blank uses this panel's own address.",
@@ -503,6 +516,19 @@ const zh: typeof en = {
     oauthClientId: "OAuth 客户端 ID",
     oauthClientIdHint:
       "连接邮箱时使用的应用程序（客户端）ID。必须是为个人 Microsoft 账户注册的公共客户端。留空则使用 OAUTH_CLIENT_ID。",
+    autoRefreshMaxDays: "自动刷新超过天数的令牌",
+    autoRefreshAt: "检查时间",
+    autoRefreshHint:
+      "每天定时刷新超过该天数未刷新的令牌，最旧的优先。填 0 表示关闭。从未刷新过的令牌视为过期；已停用的账号不处理。若容器在该时间点未运行，下次启动时会补跑；但在当天中途开启此功能不会立即执行，需等到次日——想立刻刷新请用「刷新令牌」按钮。",
+    oauthPriority: "新连接账号的优先级",
+    oauthPriorityNormal: "普通（0）",
+    oauthPriorityHighestPlusOne: "排在最前（最高 + 1）",
+    oauthPriorityHighest: "与最高持平",
+    oauthPriorityLowest: "与最低持平",
+    oauthPriorityLowestMinusOne: "排在最后（最低 - 1）",
+    oauthPriorityFixed: "固定数值",
+    oauthPriorityHint:
+      "通过回调连接的邮箱在邮箱池队列中的位置，按入库那一刻池中的实际情况计算。仅对新增账号生效：重新连接已有账号不会改动其优先级。取值范围 -99 到 99。",
     oauthRedirectUri: "OAuth 回调地址",
     oauthRedirectUriHint:
       "必须与应用注册中的回调地址完全一致；除 localhost 外必须使用 https。留空则使用本面板的地址。",

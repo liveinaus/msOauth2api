@@ -2,7 +2,13 @@ import { Router } from "express";
 import rateLimit from "express-rate-limit";
 
 import { consumeFlow, startFlow } from "../auth/oauthFlowStore";
-import { clearRefreshError, upsertAccount } from "../db/accounts";
+import {
+  clearRefreshError,
+  getAccountByEmail,
+  normaliseEmail,
+  priorityForMode,
+  upsertAccount,
+} from "../db/accounts";
 import { getPanelSettings } from "../db/panelSettings";
 import { requireApiAccess } from "../middleware/auth";
 import { noteAccountSuccess } from "../services/accountHealth";
@@ -114,7 +120,7 @@ router.post("/start", requireApiAccess, (req, res) => {
 
   const scope = consentScopeFor(resolvedAuthType);
   const { state, challenge, expiresAt } = startFlow({
-    email: email.trim().toLowerCase(),
+    email: normaliseEmail(email),
     clientId: resolvedClientId,
     authType: resolvedAuthType,
     redirectUri: resolvedRedirectUri,
@@ -263,19 +269,34 @@ router.get("/callback", callbackLimiter, async (req, res) => {
     return;
   }
 
+  /**
+   * The configured rank is for accounts this flow *adds*. Reconnecting one already on the
+   * panel leaves its priority alone: an operator who moved a row up or down did so on
+   * purpose, and a token refresh is no reason to undo it.
+   */
+  const settings = getPanelSettings();
+  const isNew = !getAccountByEmail(flow.email);
+  const priority = isNew
+    ? priorityForMode(settings.oauthPriorityMode, settings.oauthPriorityValue)
+    : undefined;
+
   // Non-null: exchangeAuthorizationCode rejects a response without a refresh token.
   const account = upsertAccount({
     email: flow.email,
     clientId: flow.clientId,
     refreshToken: token.refreshToken!,
     authType: flow.authType,
+    priority,
   });
   // A freshly consented token supersedes whatever went wrong before, so the row should not
   // keep a stale warning badge that would hold it out of the address pool.
   clearRefreshError(account.id);
   noteAccountSuccess(account.id);
 
-  console.log(`[oauth] stored refresh token for ${account.email} (account ${account.id})`);
+  console.log(
+    `[oauth] stored refresh token for ${account.email} (account ${account.id})` +
+      (priority === undefined ? "" : `, priority ${priority}`),
+  );
   page(
     res,
     200,
@@ -283,6 +304,7 @@ router.get("/callback", callbackLimiter, async (req, res) => {
     `<h1 class="ok">Mailbox connected</h1>
      <p><code>${escapeHtml(account.email)}</code> is saved and ready to use. No import needed.</p>
      <p>Granted scope: <code>${escapeHtml(token.scope || "(none reported)")}</code></p>
+     ${priority === undefined ? "" : `<p>Queue priority: <code>${priority}</code></p>`}
      <p>You can close this tab and refresh the Accounts page.</p>`,
   );
 });

@@ -282,6 +282,32 @@ A mailbox that answers also **clears** a mark left over from an earlier bad minu
 account that recovers comes back into the pool on its own. Reading mail from the row (the
 envelope button) or running a refresh is enough to do that by hand.
 
+## Keeping tokens alive
+
+Microsoft invalidates a refresh token that goes unused for long enough, and a pool whose
+addresses are handed out unevenly will have some nobody has touched in months. Settings can
+turn that from a surprise at the moment an address is needed into a scheduled job: set
+**Refresh tokens older than** to a number of days and pick a **check** time, 04:00 by
+default. Zero days leaves the sweep off, which is the default.
+
+Once a day the panel refreshes every token that has not been refreshed inside that window,
+oldest first, three at a time -- the same path and the same throttling as the panel's
+**Refresh tokens** button, so the marking rules under
+[When an account gets marked](#when-an-account-gets-marked) apply unchanged.
+
+- **A token never refreshed counts as stale.** It holds whatever was imported or consented,
+  of unknown age.
+- **Disabled accounts are skipped.** Someone switched those off; refreshing one puts it back
+  in circulation as far as Microsoft is concerned.
+- **A missed window is caught up, not skipped.** A container down at 04:00 and back at 06:00
+  still sweeps that day. The run is tracked by local calendar date, so the tick cannot fire
+  twice in one night and a restart cannot repeat it.
+- **Switching it on part way through a day waits for the next one.** Enabling it at noon does
+  not put the whole panel through the token endpoint straight away; the Refresh tokens button
+  is there for that.
+
+Times are local to the container, so set `TZ` if you want 04:00 to mean 04:00 where you are.
+
 ## Backup and migration
 
 Settings has a **Backup and migration** card that exports the whole panel as one JSON
@@ -311,7 +337,8 @@ Notes:
 - **The file holds refresh tokens and mailbox passwords in the clear.** It can read every
   mailbox on the panel. Treat it like the database.
 - **Accounts are matched by address**, not by row id, so a merge into a populated panel
-  updates the addresses it knows and adds the rest.
+  updates the addresses it knows and adds the rest. Addresses are compared without regard to
+  case, so `John@x.com` cannot become a second row alongside `john@x.com`.
 - **The admin login is only restored when `includeAdmin` is set.** Doing so retires every
   session on the target, including the one that ran the import.
 - **API keys travel as hashes**, so existing scripts keep working after a migration without
@@ -321,6 +348,13 @@ Notes:
 
 Behaviour that changed deliberately, beyond the port itself:
 
+- **The account list is ordered by the server.** `GET /api/accounts` takes `sort` and `dir`,
+  defaulting to `priority`/`desc` -- the order the pool spends addresses in. Sortable:
+  `priority`, `email`, `clientId`, `status`, `lastRefreshAt`, `lastUsedAt`, `id`. Rows with
+  no date sort last either way, `id` always breaks a tie so paging is stable, and an
+  unrecognised value falls back to the default rather than erroring. The verification code
+  and usage columns are not sortable: both come from the usages table, one row per type, so
+  an address used for three types has no single value to order by.
 - **Accounts are stored server-side** in SQLite, encrypted at rest, instead of in browser
   `localStorage`. Refresh tokens are never sent to the page -- the panel sees a fingerprint.
 - **Rolled refresh tokens are persisted.** Microsoft invalidates the old token when it issues
@@ -428,7 +462,13 @@ Open `authorizeUrl`, sign in as `a@b.com`, accept consent. The callback answers 
 saying whether the mailbox was saved, and the row is on the Accounts page immediately.
 
 `clientId`, `redirectUri` and `authType` can be passed per request to override the
-configured defaults. The returned `authorizeUrl` carries the `client_id` and `redirect_uri`
+configured defaults.
+
+Settings also decides where a newly connected mailbox lands in the pool queue: normal, level
+with or one above the current highest, level with or one below the current lowest, or a fixed
+rank. It is worked out against the pool as it stands when the account is stored, and applies
+only to accounts the flow **adds** -- reconnecting one already on the panel leaves the
+priority someone set by hand alone. The returned `authorizeUrl` carries the `client_id` and `redirect_uri`
 it resolved, so it doubles as a check that they match the app registration.
 
 Register the callback URL on the app registration exactly as the panel will send it, e.g.
@@ -474,7 +514,7 @@ Accounts import as delimited lines, four fields, `----` by default:
 email----password----client_id----refresh_token
 ```
 
-Re-importing an address updates it rather than adding a duplicate.
+Re-importing an address updates it rather than adding a duplicate, and the comparison ignores case: an address is stored lower-cased, so the same mailbox written any way lands on the one row.
 
 ### Accounts on the older IMAP grant
 

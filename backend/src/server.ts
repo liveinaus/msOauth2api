@@ -5,10 +5,11 @@ import fs from "node:fs";
 import path from "node:path";
 
 import { initCredentials } from "./auth/credentials";
-import { reencryptAll } from "./db/accounts";
+import { caseDuplicateEmails, reencryptAll } from "./db/accounts";
 import { encryptionEnabled } from "./db/crypto";
 import { dbFilePath } from "./db/database";
 import { getJwtSecret } from "./middleware/auth";
+import { startAutoRefresh } from "./services/autoRefresh";
 import accountsRouter from "./routes/accounts";
 import aiRouter from "./routes/ai";
 import apiKeysRouter from "./routes/apikeys";
@@ -185,6 +186,15 @@ async function main(): Promise<void> {
   installProcessGuards();
   await initCredentials();
 
+  // Left from before addresses were normalised: the same mailbox as two rows, which the pool
+  // would hand out twice with only one of them holding a live token.
+  for (const group of caseDuplicateEmails()) {
+    console.warn(
+      `[db] these addresses differ only in case and are the same mailbox: ${group.join(", ")}. ` +
+        "Delete the stale row; the pool treats them as two accounts.",
+    );
+  }
+
   if (encryptionEnabled()) {
     const changed = reencryptAll();
     if (changed > 0) console.log(`[db] encrypted secrets for ${changed} account(s) at rest`);
@@ -193,6 +203,8 @@ async function main(): Promise<void> {
       "[db] MSAPI_DATA_KEY is not set: refresh tokens are stored as plain text. See env.example.",
     );
   }
+
+  startAutoRefresh();
 
   app.listen(PORT, BIND_HOST, () => {
     console.log(`msOauth2api listening on http://${BIND_HOST}:${PORT}`);
