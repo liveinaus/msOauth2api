@@ -66,6 +66,7 @@ const MACHINE_ROUTES = new Set([
   "/api/delete-mail",
   "/api/get-available-email",
   "/api/get-code",
+  "/api/get-link",
   "/api/confirm-email",
   "/api/release-email",
   "/api/email-status",

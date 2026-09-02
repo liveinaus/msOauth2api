@@ -162,6 +162,54 @@ describe("address pool API", () => {
     expect(status).toBe(404);
   });
 
+  it("returns the confirmation link the fragment asks for, and retires the address", async () => {
+    // Named directly rather than leased: a lease would take whichever address the pool
+    // offers next, which is one the tests around this depend on
+    upsertAccount({ email: "link1@x.com", password: null, clientId: "c", refreshToken: "t" });
+
+    folderMessages = [
+      codeMail({
+        send: "noreply@notify.cloudflare.com",
+        subject: "[Action required] Verify your email address",
+        text: "",
+        html:
+          '<a href="https://www.cloudflare.com/">logo</a>' +
+          '<a href="https://dash.cloudflare.com/email-verification?token=tok1">Verify</a>',
+        code: undefined,
+        mailbox: "INBOX",
+      }),
+    ];
+
+    const { status, body } = await call(
+      "/api/get-link?email=link1@x.com&type=LinkCheck&contains=email-verification",
+    );
+    expect(status).toBe(200);
+    expect(body).toMatchObject({
+      status: "found",
+      link: "https://dash.cloudflare.com/email-verification?token=tok1",
+    });
+    expect(body.message).toMatchObject({ from: "noreply@notify.cloudflare.com" });
+
+    // The mail having arrived retires the address for that type, as a code does -- with no
+    // code recorded, since a link is not one
+    const account = getAccountByEmail("link1@x.com")!;
+    const usage = getUsage(account.id, "linkcheck");
+    expect(usage?.confirmedAt).toBeGreaterThan(0);
+    expect(usage?.code).toBeNull();
+  });
+
+  it("reports pending when no link carries the fragment", async () => {
+    upsertAccount({ email: "link2@x.com", password: null, clientId: "c", refreshToken: "t" });
+    folderMessages = [
+      codeMail({ html: '<a href="https://www.cloudflare.com/">logo</a>', code: undefined }),
+    ];
+    const { status, body } = await call(
+      "/api/get-link?email=link2@x.com&contains=email-verification",
+    );
+    expect(status).toBe(200);
+    expect(body.status).toBe("pending");
+  });
+
   it("releases a leased address but leaves a confirmed one retired", async () => {
     // A type of its own: pool1 and pool2 are both confirmed for Telegram by now, and a
     // confirmed row is exactly what must not be released.

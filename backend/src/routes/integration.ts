@@ -21,6 +21,7 @@ import {
 import { requireApiAccess } from "../middleware/auth";
 import { ImapTemporaryError, ImapUnavailableError } from "../services/imap";
 import { findCode, parseSince } from "../services/codeSearch";
+import { findLink } from "../services/links";
 import { findForType, rulesFor } from "../services/typeRules";
 import { readFolders } from "../services/mail";
 import { isGrantFailure, OAuthError } from "../services/oauth";
@@ -234,6 +235,101 @@ async function handleGetCode(req: Request, res: Response): Promise<void> {
         email: account.email,
         type: type ?? null,
         query,
+        warning: error.detail,
+      });
+      return;
+    }
+    sendError(res, error, account);
+  }
+}
+
+/**
+ * The confirmation link sent to an address, if the mail has arrived yet.
+ *
+ * The counterpart to `get-code`, for the services that verify an address by having it
+ * visited rather than by mailing a code -- Cloudflare's account signup among them. Only
+ * this service can answer it: the link sits in an anchor inside the message body, which
+ * `get-code` never hands back, so a caller polling that endpoint has nothing to click.
+ *
+ * `contains` is what picks the right link out of the mail: nearly every message opens with
+ * a logo linking to the marketing site, so the first link is almost never the one wanted.
+ *
+ * Answers 200 either way, `status` saying which, exactly as `get-code` does.
+ */
+router.get("/get-link", requireApiAccess, handleGetLink);
+router.post("/get-link", requireApiAccess, handleGetLink);
+
+async function handleGetLink(req: Request, res: Response): Promise<void> {
+  const params = readParams(req);
+  const account = requireStoredAccount(params, res);
+  if (!account) return;
+
+  const type = optionalType(params);
+  const usage = type ? getUsage(account.id, type) : undefined;
+
+  // Same window as a code read, and for the same reason: a pool address is handed out
+  // again once its lease lapses, and an earlier signup's confirmation link would verify
+  // nothing about this one.
+  const rules = rulesFor(type, {
+    since: parseSince(params.since) ?? usage?.leasedAt,
+    from: params.from?.trim() || undefined,
+    subject: params.subject?.trim() || undefined,
+  });
+  const contains = params.contains?.trim() || undefined;
+
+  try {
+    const result = await readFolders(
+      {
+        email: account.email,
+        clientId: account.clientId,
+        refreshToken: account.refreshToken,
+        authType: account.authType,
+      },
+      ["INBOX", "Junk"],
+      parseLimit(params.limit, SEARCH_DEFAULT, SEARCH_MAX),
+    );
+    noteAccountSuccess(account.id);
+    clearRefreshError(account.id);
+    noteUsage(account.email, result.messages);
+
+    const hit = findLink(result.messages, rules, contains);
+    if (!hit) {
+      res.json({
+        status: "pending",
+        email: account.email,
+        type: type ?? null,
+        query: { ...rules.query, contains: contains ?? null },
+      });
+      return;
+    }
+
+    // The mail having arrived is the proof the address was used, so the claim becomes
+    // permanent -- as a code does. No code is recorded: a link is not one, and a column
+    // holding a single-use URL would only read as one later.
+    if (type) confirmUsage(account.id, type, null);
+
+    res.json({
+      status: "found",
+      email: account.email,
+      type: type ?? null,
+      link: hit.link,
+      message: {
+        from: hit.message.send,
+        subject: hit.message.subject,
+        date: hit.message.date,
+        mailbox: hit.message.mailbox,
+      },
+    });
+  } catch (error) {
+    // A slow mailbox is a "not yet", as it is for a code read: the caller is polling, and
+    // an error would send someone to read the mail by hand instead.
+    if (error instanceof ImapTemporaryError) {
+      console.warn(`[integration] ${account.email} slow to answer: ${error.detail}`);
+      res.json({
+        status: "pending",
+        email: account.email,
+        type: type ?? null,
+        query: { ...rules.query, contains: contains ?? null },
         warning: error.detail,
       });
       return;
