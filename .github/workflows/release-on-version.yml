@@ -1,0 +1,140 @@
+name: Release on version change
+
+# Bumping the version in package.json is the whole release gesture: merge that to main and
+# this tags it, publishes a GitHub release with generated notes, and pushes the images.
+#
+# Keyed on whether the tag already exists rather than on what the push changed. A path filter
+# alone would fire again for a dependency bump in the same file, and would miss a version
+# landing through a route the filter did not anticipate; asking the remote whether v<version>
+# is already tagged is the same answer every time, so a re-run, a manual dispatch and a
+# routine edit are all safely no-ops.
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "backend/package.json"
+      - "frontend/package.json"
+  workflow_dispatch:
+
+# One release at a time. Two bumps landing together must not race for the same tag, and
+# cancelling a half-finished release would leave the tag pushed and nothing published.
+concurrency:
+  group: release-on-version
+  cancel-in-progress: false
+
+jobs:
+  version:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.read.outputs.version }}
+      tag: ${{ steps.read.outputs.tag }}
+      release: ${{ steps.check.outputs.release }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Read the version
+        id: read
+        # The backend is the source of truth. The frontend is checked against it and a
+        # mismatch fails the run: the two are built into one image, and shipping a half-
+        # finished bump is worse than not shipping. Set-output uses printf so a stray
+        # newline cannot smuggle extra values into the step outputs.
+        run: |
+          set -euo pipefail
+          VERSION="$(node -p "require('./backend/package.json').version")"
+          FRONTEND="$(node -p "require('./frontend/package.json').version")"
+
+          if [ -z "${VERSION}" ] || [ "${VERSION}" = "undefined" ]; then
+            echo "::error::backend/package.json has no version" >&2
+            exit 1
+          fi
+          if [ "${VERSION}" != "${FRONTEND}" ]; then
+            echo "::error::version mismatch: backend ${VERSION}, frontend ${FRONTEND}" >&2
+            exit 1
+          fi
+
+          # The README is the Docker Hub description and names the tag to pin, so a stale one
+          # is worth saying out loud. Only a warning: it is documentation, and holding the
+          # image back over a line of prose helps nobody.
+          if ! grep -qF "Version **${VERSION}**" README.md; then
+            echo "::warning::README.md does not mention version ${VERSION}"
+          fi
+
+          printf 'version=%s\n' "${VERSION}" >> "$GITHUB_OUTPUT"
+          printf 'tag=v%s\n' "${VERSION}" >> "$GITHUB_OUTPUT"
+
+      - name: Has this version been released already?
+        id: check
+        env:
+          TAG: ${{ steps.read.outputs.tag }}
+        # ls-remote asks the remote directly, so this works on the shallow default checkout.
+        run: |
+          set -euo pipefail
+          if git ls-remote --exit-code --tags origin "refs/tags/${TAG}" >/dev/null 2>&1; then
+            echo "${TAG} is already tagged, nothing to release"
+            printf 'release=false\n' >> "$GITHUB_OUTPUT"
+          else
+            echo "${TAG} is new"
+            printf 'release=true\n' >> "$GITHUB_OUTPUT"
+          fi
+
+  # The same checks a push to main runs, called rather than copied so the two cannot drift.
+  # Deliberately ahead of the tag: a failing bump leaves no tag, no release and no image, so
+  # there is nothing to delete and the fix is just another commit. Tagging first and testing
+  # afterwards would mean unpicking a published release by hand.
+  test:
+    needs: version
+    if: needs.version.outputs.release == 'true'
+    permissions:
+      contents: read
+    uses: ./.github/workflows/ci.yml
+
+  release:
+    needs: [version, test]
+    if: needs.version.outputs.release == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # create the tag and the release
+    steps:
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ needs.version.outputs.tag }}
+          VERSION: ${{ needs.version.outputs.version }}
+        # --target pins the tag to the commit that carried the bump, rather than whatever
+        # main points at by the time this runs -- which matters more now the tag is written
+        # after the tests, with a few minutes in between. A semver prerelease (0.9.0-beta.1,
+        # -rc.1) is marked as one, keeping it off the repository's "latest release".
+        #
+        # GH_REPO means gh needs no checkout to know where it is pointing.
+        run: |
+          set -euo pipefail
+          PRERELEASE=""
+          case "${VERSION}" in
+            *-*) PRERELEASE="--prerelease" ;;
+          esac
+
+          gh release create "${TAG}" \
+            --target "${GITHUB_SHA}" \
+            --title "${TAG}" \
+            --generate-notes \
+            ${PRERELEASE}
+
+          echo "Released ${TAG}" >> "$GITHUB_STEP_SUMMARY"
+
+  # Same workflow the manual route uses, so a bumped release and a hand-published one build
+  # and tag identically.
+  publish:
+    needs: [version, release]
+    if: needs.version.outputs.release == 'true'
+    permissions:
+      contents: read
+      packages: write
+    uses: ./.github/workflows/docker-publish.yml
+    with:
+      tag: ${{ needs.version.outputs.tag }}
+    secrets: inherit

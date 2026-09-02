@@ -7,11 +7,22 @@ on:
     tags:
       - "dev-*" # dev builds via direct tag push only
       - "v*-beta*" # beta builds via direct tag push only
+  # Called by release-on-version.yml. A release that workflow creates carries the built-in
+  # GITHUB_TOKEN, and GitHub deliberately does not let such an event start another workflow
+  # run, so the `release` trigger above would never fire for it. Being callable means the
+  # publish is invoked directly instead, with no personal access token to store or rotate.
+  workflow_call:
+    inputs:
+      tag:
+        description: "Tag to build and publish (e.g. v1.0.0)"
+        required: true
+        type: string
   workflow_dispatch:
     inputs:
       tag:
         description: "Image tag override (e.g. v1.0.0, dev-v1.0.0-1, or v1.0.0-beta.1)"
         required: false
+        type: string
 
 jobs:
   # Resolve the tag once so both build jobs use identical values
@@ -31,8 +42,9 @@ jobs:
         id: resolve
         env:
           # release events don't populate GITHUB_REF_NAME with the tag reliably, so read the
-          # tag straight from the release payload when present
-          INPUT_TAG: ${{ github.event.inputs.tag }}
+          # tag straight from the release payload when present. INPUT_TAG covers both the
+          # manual dispatch and a workflow_call, which `github.event.inputs` would not.
+          INPUT_TAG: ${{ inputs.tag }}
           RELEASE_TAG: ${{ github.event.release.tag_name }}
         run: |
           if [ -n "${INPUT_TAG}" ]; then
@@ -48,11 +60,15 @@ jobs:
           fi
           # dev-*   → dev channel, keep tag as-is (no v-strip)
           # *beta*  → beta channel, strip v prefix
+          # any other semver prerelease (-rc.1, -alpha.2) → beta channel as well, so that
+          #           `latest` only ever names a finished version. Worth being explicit now
+          #           a version bump publishes on its own: before, shipping an unfinished
+          #           version meant deliberately publishing a release for it.
           # anything else → latest channel, strip v prefix
           if [[ "${TAG}" == dev-* ]]; then
             echo "semver=${TAG}" >> "$GITHUB_OUTPUT"
             echo "channel=dev" >> "$GITHUB_OUTPUT"
-          elif [[ "${TAG}" == *beta* ]]; then
+          elif [[ "${TAG}" == *beta* || "${TAG#v}" == *-* ]]; then
             echo "semver=${TAG#v}" >> "$GITHUB_OUTPUT"
             echo "channel=beta" >> "$GITHUB_OUTPUT"
           else
