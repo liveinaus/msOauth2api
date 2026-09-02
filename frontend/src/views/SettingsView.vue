@@ -125,6 +125,50 @@
       <p class="hint">{{ t("settings.autoRefreshHint") }}</p>
 
       <div class="form-group">
+        <label class="form-label">{{ t("settings.verify") }}</label>
+        <p class="hint">{{ t("settings.verifyHint") }}</p>
+
+        <div v-for="(rule, index) in panel.verifyRules" :key="index" class="form-row">
+          <div class="form-group">
+            <label class="form-label">{{ t("settings.verifyEveryDays") }}</label>
+            <input v-model.number="rule.everyDays" class="form-input" type="number" min="1" max="365" />
+          </div>
+          <div class="form-group">
+            <label class="form-label">{{ t("settings.verifyFrom") }}</label>
+            <input v-model.number="rule.from" class="form-input" type="number" :min="-99" :max="99" />
+          </div>
+          <div class="form-group">
+            <label class="form-label">{{ t("settings.verifyTo") }}</label>
+            <input v-model.number="rule.to" class="form-input" type="number" :min="-99" :max="99" />
+          </div>
+          <div class="form-group" style="flex: 0 0 auto; align-self: flex-end">
+            <button class="btn btn-danger" :title="t('settings.verifyRemove')" @click="removeRule(index)">
+              <i class="fa-solid fa-trash"></i>
+            </button>
+          </div>
+        </div>
+
+        <p v-if="!panel.verifyRules.length" class="hint">{{ t("settings.verifyOff") }}</p>
+
+        <div class="form-row">
+          <div class="form-group">
+            <button class="btn" :disabled="panel.verifyRules.length >= MAX_VERIFY_RULES" @click="addRule">
+              <i class="fa-solid fa-plus"></i> {{ t("settings.verifyAdd") }}
+            </button>
+          </div>
+          <div class="form-group">
+            <label class="form-label">{{ t("settings.verifyAt") }}</label>
+            <input
+              v-model="panel.verifyAt"
+              class="form-input"
+              type="time"
+              :disabled="!panel.verifyRules.length"
+            />
+          </div>
+        </div>
+      </div>
+
+      <div class="form-group">
         <label class="check-row">
           <input v-model="panel.showClientId" type="checkbox" />
           {{ t("settings.showClientId") }}
@@ -354,6 +398,7 @@ import {
   savePanelSettings,
   updateCredentials,
   DEFAULT_PANEL_SETTINGS,
+  MAX_VERIFY_RULES,
   type ApiKeyView,
   type BackupImportReport,
   type BackupMode,
@@ -372,7 +417,9 @@ const newUsername = ref("");
 const newPassword = ref("");
 const savingCredentials = ref(false);
 
-const panel = ref<PanelSettings>({ ...DEFAULT_PANEL_SETTINGS });
+// The rule list is copied, not shared: a shallow spread would alias the exported default
+// array, and adding a rule before the settings load would push onto it.
+const panel = ref<PanelSettings>({ ...DEFAULT_PANEL_SETTINGS, verifyRules: [] });
 const savingPanel = ref(false);
 
 const newKeyName = ref("");
@@ -392,6 +439,18 @@ const importMode = ref<BackupMode>("merge");
 const importAdmin = ref(false);
 const importing = ref(false);
 const importReport = ref<BackupImportReport | null>(null);
+
+/**
+ * A new rule starts on the whole pool at a fortnight, which is the interval that costs
+ * least: an operator narrows the band from there rather than having to widen it.
+ */
+function addRule(): void {
+  panel.value.verifyRules.push({ everyDays: 14, from: -99, to: 99 });
+}
+
+function removeRule(index: number): void {
+  panel.value.verifyRules.splice(index, 1);
+}
 
 function flash(message: string): void {
   notice.value = message;

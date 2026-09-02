@@ -3,13 +3,16 @@ import { decryptSecret, encryptSecret, encryptionEnabled, isEncrypted } from "./
 import {
   clampPriority,
   parseAuthType,
+  parseBlockReason,
   PRIORITY_MAX,
   PRIORITY_MIN,
   type Account,
   type AuthType,
+  type BlockReason,
   type OauthPriorityMode,
   type AccountSort,
   type SortDir,
+  type VerifyRule,
   DEFAULT_ACCOUNT_SORT,
   DEFAULT_SORT_DIR,
 } from "../types";
@@ -24,6 +27,7 @@ type AccountRow = {
   priority: number | null;
   remark: string | null;
   disabled: number;
+  block_reason: string | null;
   last_refresh_at: number | null;
   last_refresh_error: string | null;
   last_copied_at: number | null;
@@ -40,6 +44,7 @@ export type AccountInput = {
   authType?: AuthType;
   priority?: number;
   remark?: string | null;
+  blockReason?: BlockReason | null;
 };
 
 function toAccount(row: AccountRow): Account {
@@ -55,6 +60,7 @@ function toAccount(row: AccountRow): Account {
     priority: clampPriority(row.priority ?? 0),
     remark: row.remark,
     disabled: row.disabled === 1,
+    blockReason: parseBlockReason(row.block_reason),
     lastRefreshAt: row.last_refresh_at,
     lastRefreshError: row.last_refresh_error,
     lastCopiedAt: row.last_copied_at,
@@ -176,6 +182,7 @@ export function upsertAccount(input: AccountInput): Account {
          auth_type     = COALESCE(@authType, auth_type),
          priority      = COALESCE(@priority, priority),
          remark        = COALESCE(@remark, remark),
+         block_reason  = COALESCE(@blockReason, block_reason),
          updated_at    = @now
        WHERE id = @id`,
     ).run({
@@ -190,6 +197,7 @@ export function upsertAccount(input: AccountInput): Account {
       authType: input.authType ?? null,
       priority: input.priority === undefined ? null : clampPriority(input.priority),
       remark: input.remark ?? null,
+      blockReason: input.blockReason ?? null,
       now,
     });
     // Non-null: the row was just read and updated by id.
@@ -197,9 +205,10 @@ export function upsertAccount(input: AccountInput): Account {
   }
 
   db.prepare(
-    `INSERT INTO accounts (email, password, client_id, refresh_token, auth_type, priority, remark, created_at, updated_at)
+    `INSERT INTO accounts (email, password, client_id, refresh_token, auth_type, priority, remark,
+                           block_reason, created_at, updated_at)
      VALUES (@email, @password, @clientId, @refreshToken, COALESCE(@authType, 'auto'),
-             COALESCE(@priority, 0), @remark, @now, @now)
+             COALESCE(@priority, 0), @remark, @blockReason, @now, @now)
      ON CONFLICT(email) DO UPDATE SET
        password      = excluded.password,
        client_id     = excluded.client_id,
@@ -207,6 +216,7 @@ export function upsertAccount(input: AccountInput): Account {
        auth_type     = COALESCE(@authType, accounts.auth_type),
        priority      = COALESCE(@priority, accounts.priority),
        remark        = COALESCE(excluded.remark, accounts.remark),
+       block_reason  = COALESCE(excluded.block_reason, accounts.block_reason),
        updated_at    = excluded.updated_at`,
   ).run({
     email,
@@ -216,6 +226,7 @@ export function upsertAccount(input: AccountInput): Account {
     authType: input.authType ?? null,
     priority: input.priority === undefined ? null : clampPriority(input.priority),
     remark: input.remark ?? null,
+    blockReason: input.blockReason ?? null,
     now,
   });
 
@@ -240,6 +251,7 @@ export function updateAccount(
        priority      = @priority,
        remark        = @remark,
        disabled      = @disabled,
+       block_reason  = @blockReason,
        updated_at    = @now
      WHERE id = @id`,
   ).run({
@@ -255,6 +267,14 @@ export function updateAccount(
     refreshToken: encryptSecret(patch.refreshToken ?? existing.refreshToken),
     remark: patch.remark === undefined ? existing.remark : patch.remark,
     disabled: (patch.disabled ?? existing.disabled) ? 1 : 0,
+    // Switching an account back on is the operator saying it is well again, so the recorded
+    // reason goes with it: a live row carrying "abuse" would read as though it were still out.
+    blockReason:
+      patch.disabled === false
+        ? null
+        : patch.blockReason === undefined
+          ? existing.blockReason
+          : patch.blockReason,
     now: Date.now(),
   });
 
@@ -366,6 +386,58 @@ export function priorityForMode(mode: OauthPriorityMode, fixedValue: number): nu
     case "lowestMinusOne":
       return clampPriority(bottom - 1);
   }
+}
+
+/**
+ * Takes an account out of the pool with a reason and a note against it.
+ *
+ * The note is appended rather than written over the remark: an address usually already
+ * carries an operator's own, and losing that to an automatic line is worse than a long
+ * field. A row already blocked for the same reason is left exactly as it is, so a sweep that
+ * keeps meeting the same dead mailbox does not grow its remark by a line every night.
+ */
+export function blockAccount(id: number, reason: BlockReason, note: string): Account | undefined {
+  const existing = getAccount(id);
+  if (!existing) return undefined;
+  if (existing.disabled && existing.blockReason === reason) return existing;
+
+  const remark = [existing.remark?.trim(), note.trim()].filter(Boolean).join("\n") || null;
+  db.prepare(
+    `UPDATE accounts SET
+       disabled     = 1,
+       block_reason = @reason,
+       remark       = @remark,
+       updated_at   = @now
+     WHERE id = @id`,
+  ).run({ id, reason, remark, now: Date.now() });
+
+  return getAccount(id);
+}
+
+/**
+ * The accounts one verification rule is due to check.
+ *
+ * `last_refresh_at` is the clock rather than a column of its own, because it is stamped on
+ * every refresh attempt whether it succeeded or not -- which is exactly "when this account
+ * was last put to Microsoft". A token the panel's own button spent this morning is therefore
+ * not spent again tonight, and a row that has never been refreshed is due at once, its token
+ * being of unknown age.
+ *
+ * Disabled rows are skipped, as they are by the nightly refresh: they are already out of the
+ * pool, and re-checking one would only cost a call to learn what the row already says.
+ */
+export function accountsNeedingVerify(rule: VerifyRule, now = Date.now()): Account[] {
+  const cutoff = now - rule.everyDays * 24 * 60 * 60 * 1000;
+  const rows = db
+    .prepare(
+      `SELECT * FROM accounts
+        WHERE disabled = 0
+          AND priority BETWEEN @from AND @to
+          AND (last_refresh_at IS NULL OR last_refresh_at < @cutoff)
+        ORDER BY (last_refresh_at IS NOT NULL), last_refresh_at ASC, id ASC`,
+    )
+    .all({ from: rule.from, to: rule.to, cutoff }) as AccountRow[];
+  return rows.map(toAccount);
 }
 
 /**

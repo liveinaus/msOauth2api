@@ -9,6 +9,7 @@ import { caseDuplicateEmails, reencryptAll } from "./db/accounts";
 import { encryptionEnabled } from "./db/crypto";
 import { dbFilePath } from "./db/database";
 import { getJwtSecret } from "./middleware/auth";
+import { startAccountVerify } from "./services/accountVerify";
 import { startAutoRefresh } from "./services/autoRefresh";
 import accountsRouter from "./routes/accounts";
 import aiRouter from "./routes/ai";
@@ -205,6 +206,7 @@ async function main(): Promise<void> {
   }
 
   startAutoRefresh();
+  startAccountVerify();
 
   app.listen(PORT, BIND_HOST, () => {
     console.log(`msOauth2api listening on http://${BIND_HOST}:${PORT}`);

@@ -43,6 +43,8 @@ db.exec(`
     priority           INTEGER NOT NULL DEFAULT 0,
     remark             TEXT,
     disabled           INTEGER NOT NULL DEFAULT 0,
+    -- Why it is disabled: 'abuse', 'invalidGrant', 'manual', or NULL when nothing recorded one.
+    block_reason       TEXT,
     last_refresh_at    INTEGER,
     last_refresh_error TEXT,
     last_copied_at     INTEGER,
@@ -108,6 +110,9 @@ addColumn("accounts", "last_used_at", "INTEGER");
 // default describes, so no backfill is needed.
 addColumn("accounts", "auth_type", "TEXT NOT NULL DEFAULT 'auto'");
 addColumn("accounts", "priority", "INTEGER NOT NULL DEFAULT 0");
+// Nullable with no backfill: rows disabled before this existed were switched off by hand,
+// and guessing a reason for them would be worse than leaving it blank.
+addColumn("accounts", "block_reason", "TEXT");
 
 export function getSetting(key: string): string | undefined {
   const row = db.prepare("SELECT value FROM settings WHERE key = ?").get(key) as

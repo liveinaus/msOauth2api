@@ -40,10 +40,12 @@ import {
   DEFAULT_SORT_DIR,
   parseAccountSort,
   parseAuthType,
+  parseBlockReason,
   parsePriority,
   parseSortDir,
   type Account,
   type AuthType,
+  type BlockReason,
 } from "../types";
 
 const router = Router();
@@ -84,6 +86,7 @@ function toPublic(account: Account, usages: Usage[] = listUsages(account.id)) {
     tokenHint: `${account.refreshToken.slice(0, 6)}…${account.refreshToken.slice(-4)}`,
     remark: account.remark,
     disabled: account.disabled,
+    blockReason: account.blockReason,
     lastRefreshAt: account.lastRefreshAt,
     lastRefreshError: account.lastRefreshError,
     lastCopiedAt: account.lastCopiedAt,
@@ -97,6 +100,12 @@ function toPublic(account: Account, usages: Usage[] = listUsages(account.id)) {
 function publicById(id: number) {
   const account = getAccount(id);
   return account ? toPublic(account) : null;
+}
+
+/** Reads a `blockReason` off a patch body: a reason, an explicit clear, or "not supplied". */
+function blockReasonPatch(value: unknown): BlockReason | null | undefined {
+  if (value === null || value === "") return null;
+  return parseBlockReason(value) ?? undefined;
 }
 
 /**
@@ -147,20 +156,23 @@ router.post("/", (req, res) => {
 
 /**
  * Reads what the exporter writes after the four required fields: a protocol name in the
- * fifth position, then `priority`, `remark` and `disabled` as labelled `key=value` fields
- * in any order.
+ * fifth position, then `priority`, `remark`, `disabled` and `block` as labelled `key=value`
+ * fields in any order.
  *
  * Labelled rather than positional because a real file's own trailing columns have to stay
  * ignorable -- reading column six as a priority would let stray data rewrite the queue.
  * Anything unlabelled, or labelled with something else, is skipped as before.
  */
-function parseTailFields(fields: string[]): {
+type TailFields = {
   authType?: AuthType;
   priority?: number;
   remark?: string;
   disabled?: boolean;
-} {
-  const tail: { authType?: AuthType; priority?: number; remark?: string; disabled?: boolean } = {
+  blockReason?: BlockReason;
+};
+
+function parseTailFields(fields: string[]): TailFields {
+  const tail: TailFields = {
     authType: parseAuthType(fields[4]) ?? undefined,
   };
 
@@ -172,6 +184,7 @@ function parseTailFields(fields: string[]): {
     if (key === "priority" && value) tail.priority = parsePriority(Number(value)) ?? undefined;
     else if (key === "remark") tail.remark = value;
     else if (key === "disabled") tail.disabled = value === "1" || value.toLowerCase() === "true";
+    else if (key === "block") tail.blockReason = parseBlockReason(value) ?? undefined;
   }
   return tail;
 }
@@ -261,6 +274,7 @@ router.post("/import", (req, res) => {
       authType: tail.authType ?? fileAuthType,
       priority: priority ?? tail.priority,
       remark: tail.remark,
+      blockReason: tail.blockReason,
     });
     // Not part of the upsert: a line that says nothing about it must leave a disabled
     // account disabled rather than quietly putting it back in the pool.
@@ -295,6 +309,7 @@ router.get("/export", (req, res) => {
       if (a.priority !== 0) fields.push(`priority=${a.priority}`);
       if (a.remark) fields.push(`remark=${oneLine(a.remark, sep)}`);
       if (a.disabled) fields.push("disabled=1");
+      if (a.blockReason) fields.push(`block=${a.blockReason}`);
       return fields.join(sep);
     })
     .join("\n");
@@ -304,8 +319,17 @@ router.get("/export", (req, res) => {
 
 router.patch("/:id", (req, res) => {
   const id = Number(req.params.id);
-  const { email, password, clientId, refreshToken, authType, priority, remark, disabled } =
-    req.body ?? {};
+  const {
+    email,
+    password,
+    clientId,
+    refreshToken,
+    authType,
+    priority,
+    remark,
+    disabled,
+    blockReason,
+  } = req.body ?? {};
 
   if (authType !== undefined && parseAuthType(authType) === null) {
     res.status(400).json({ error: `authType must be one of: ${AUTH_TYPES.join(", ")}` });
@@ -326,6 +350,9 @@ router.patch("/:id", (req, res) => {
     authType: parseAuthType(authType) ?? undefined,
     remark: typeof remark === "string" ? remark : undefined,
     disabled: typeof disabled === "boolean" ? disabled : undefined,
+    // Explicit null clears the reason; anything unrecognised leaves the stored one alone.
+    // Enabling an account clears it regardless -- see updateAccount.
+    blockReason: blockReasonPatch(blockReason),
   });
 
   if (!updated) {

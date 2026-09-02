@@ -28,7 +28,7 @@ let timer: NodeJS.Timeout | null = null;
 let running = false;
 
 /** Local calendar date, which is what "already run today" is measured in. */
-function localDate(at: Date): string {
+export function localDate(at: Date): string {
   const year = at.getFullYear();
   const month = String(at.getMonth() + 1).padStart(2, "0");
   const day = String(at.getDate()).padStart(2, "0");

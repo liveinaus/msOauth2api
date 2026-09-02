@@ -135,6 +135,42 @@ export function isGrantFailure(error: unknown): boolean {
 }
 
 /**
+ * Whether Microsoft has put the mailbox into service abuse mode.
+ *
+ * A newly consented account is the usual victim: the callback stores a working token, and
+ * within hours the token endpoint starts answering `AADSTS70000: User account is found to be
+ * in service abuse mode`. Nothing else tells the panel, so the row looks healthy until an
+ * address is handed out and the read fails.
+ *
+ * Matched on the phrase, not on the number: AADSTS70000 is the generic `invalid_grant`
+ * reply and an ordinary expired token carries it too, so keying off the code alone would
+ * retire healthy accounts that only need re-consenting.
+ */
+export function isAbuseBlock(error: unknown): boolean {
+  return error instanceof OAuthError && /service abuse mode/i.test(error.details);
+}
+
+/**
+ * The readable half of a token-endpoint error: its `error_description`, on one line.
+ *
+ * The raw details are a JSON body with a stack of correlation ids in it, which is no use as
+ * a note on an account row.
+ */
+export function describeOAuthError(detail: string, limit = 240): string {
+  let description = detail;
+  try {
+    const parsed = JSON.parse(detail) as { error_description?: unknown };
+    if (typeof parsed.error_description === "string") description = parsed.error_description;
+  } catch {
+    // Not JSON, so the body itself is the best available.
+  }
+  return description
+    .split(/[\r\n]/)[0]
+    .trim()
+    .slice(0, limit);
+}
+
+/**
  * Scopes to ask consent for when connecting a mailbox through the panel.
  *
  * Wider than the per-request scopes above because consent is granted once and spent many

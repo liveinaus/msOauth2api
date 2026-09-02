@@ -1,5 +1,11 @@
 import { getSetting, setSetting } from "./database";
-import { clampPriority, parseOauthPriorityMode, type OauthPriorityMode } from "../types";
+import {
+  clampPriority,
+  parseOauthPriorityMode,
+  parseVerifyRules,
+  type OauthPriorityMode,
+  type VerifyRule,
+} from "../types";
 
 /**
  * Panel preferences.
@@ -37,6 +43,14 @@ export type PanelSettings = {
   autoRefreshMaxDays: number;
   /** Local time of day the sweep runs, `HH:MM`. */
   autoRefreshAt: string;
+  /**
+   * Priority bands to re-check, each with its own interval. Empty turns the check off, which
+   * is the default -- like the refresh sweep, a panel that has not asked for it should not be
+   * talking to Microsoft on a timer.
+   */
+  verifyRules: VerifyRule[];
+  /** Local time of day the verification runs, `HH:MM`. */
+  verifyAt: string;
 };
 
 export type UsageMode = "copy" | "mail";
@@ -54,6 +68,10 @@ export const DEFAULT_PANEL_SETTINGS: PanelSettings = {
   oauthPriorityValue: 0,
   autoRefreshMaxDays: 0,
   autoRefreshAt: "04:00",
+  verifyRules: [],
+  // An hour after the refresh sweep's default, so the two are not queued at the token
+  // endpoint together on an install that turns both on and changes neither time.
+  verifyAt: "05:00",
 };
 
 const KEYS = {
@@ -71,6 +89,9 @@ const KEYS = {
   autoRefreshAt: "panel.auto_refresh_at",
   /** The local date (YYYY-MM-DD) the sweep last ran, so a restart cannot repeat it. */
   autoRefreshLastRun: "panel.auto_refresh_last_run",
+  verifyRules: "panel.verify_rules",
+  verifyAt: "panel.verify_at",
+  verifyLastRun: "panel.verify_last_run",
 } as const;
 
 /** Bounds exist so a typo cannot set a one-second poll hammering Microsoft for an hour. */
@@ -117,6 +138,24 @@ function readPriority(key: string, fallback: number): number {
   return Number.isFinite(raw) ? clampPriority(Math.trunc(raw)) : fallback;
 }
 
+/**
+ * The rules as stored: one JSON array in one key.
+ *
+ * A list of rows does not fit the flat key/value settings table without either a column of
+ * numbered keys or a table of its own, and neither is worth it for a handful of rows nothing
+ * else joins against. Unreadable JSON reads as "no rules" rather than throwing, so one bad
+ * write cannot take the settings page down with it.
+ */
+function readVerifyRules(): VerifyRule[] {
+  const raw = getSetting(KEYS.verifyRules);
+  if (!raw) return [];
+  try {
+    return parseVerifyRules(JSON.parse(raw)) ?? [];
+  } catch {
+    return [];
+  }
+}
+
 function readBoolean(key: string, fallback: boolean): boolean {
   const raw = getSetting(key);
   return raw === undefined ? fallback : raw === "true";
@@ -160,6 +199,8 @@ export function getPanelSettings(): PanelSettings {
     ),
     autoRefreshAt:
       parseTimeOfDay(getSetting(KEYS.autoRefreshAt)) ?? DEFAULT_PANEL_SETTINGS.autoRefreshAt,
+    verifyRules: readVerifyRules(),
+    verifyAt: parseTimeOfDay(getSetting(KEYS.verifyAt)) ?? DEFAULT_PANEL_SETTINGS.verifyAt,
   };
 }
 
@@ -205,6 +246,12 @@ export function savePanelSettings(patch: Partial<PanelSettings>): PanelSettings 
   }
   const at = parseTimeOfDay(patch.autoRefreshAt);
   if (at) setSetting(KEYS.autoRefreshAt, at);
+  // An empty array is a real value here -- it is how the check is turned off -- so the list
+  // is written whenever one was supplied at all.
+  const rules = parseVerifyRules(patch.verifyRules);
+  if (rules) setSetting(KEYS.verifyRules, JSON.stringify(rules));
+  const verifyAt = parseTimeOfDay(patch.verifyAt);
+  if (verifyAt) setSetting(KEYS.verifyAt, verifyAt);
   const mode = parseOauthPriorityMode(patch.oauthPriorityMode);
   if (mode) setSetting(KEYS.oauthPriorityMode, mode);
   if (typeof patch.oauthPriorityValue === "number" && Number.isFinite(patch.oauthPriorityValue)) {
@@ -223,4 +270,13 @@ export function getAutoRefreshLastRun(): string {
 
 export function setAutoRefreshLastRun(date: string): void {
   setSetting(KEYS.autoRefreshLastRun, date);
+}
+
+/** The local date the verification last ran, as `YYYY-MM-DD`, or "" when it never has. */
+export function getVerifyLastRun(): string {
+  return getSetting(KEYS.verifyLastRun) ?? "";
+}
+
+export function setVerifyLastRun(date: string): void {
+  setSetting(KEYS.verifyLastRun, date);
 }

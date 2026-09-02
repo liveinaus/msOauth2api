@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { getPanelSettings, parseTimeOfDay, savePanelSettings } from "../db/panelSettings";
 import { requireAuth } from "../middleware/auth";
-import { parseOauthPriorityMode } from "../types";
+import { parseOauthPriorityMode, parseVerifyRules } from "../types";
 
 const router = Router();
 
@@ -35,6 +35,10 @@ router.put("/", (req, res) => {
       autoRefreshMaxDays:
         typeof body.autoRefreshMaxDays === "number" ? body.autoRefreshMaxDays : undefined,
       autoRefreshAt: parseTimeOfDay(body.autoRefreshAt) ?? undefined,
+      // An empty list is meaningful -- it switches the check off -- so only a body that
+      // omits the field entirely leaves the stored rules alone.
+      verifyRules: parseVerifyRules(body.verifyRules) ?? undefined,
+      verifyAt: parseTimeOfDay(body.verifyAt) ?? undefined,
     }),
   );
 });

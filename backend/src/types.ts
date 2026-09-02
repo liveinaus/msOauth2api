@@ -38,6 +38,74 @@ export function clampPriority(value: number): number {
 }
 
 /**
+ * Why an account is out of the pool.
+ *
+ * Recorded alongside `disabled` because "switched off" on its own does not say whether an
+ * operator parked the address or Microsoft took it away, and only the second is worth
+ * re-checking or replacing. "abuse" is service abuse mode, which a freshly connected mailbox
+ * can fall into within hours of the callback; "invalidGrant" is a token the grant no longer
+ * accepts; "manual" is somebody's own switch. Null is a row nothing has been recorded against.
+ */
+export const BLOCK_REASONS = ["abuse", "invalidGrant", "manual"] as const;
+
+export type BlockReason = (typeof BLOCK_REASONS)[number];
+
+export function parseBlockReason(value: unknown): BlockReason | null {
+  const normalised = typeof value === "string" ? value.trim() : "";
+  return BLOCK_REASONS.includes(normalised as BlockReason) ? (normalised as BlockReason) : null;
+}
+
+/**
+ * One band of the pool, and how often the accounts in it are re-checked.
+ *
+ * A band per interval rather than one interval for the lot because the two ends of the pool
+ * are worth different amounts of traffic: addresses nobody has spent yet can wait a
+ * fortnight, while the ones parked at the bottom are usually down there because something is
+ * already wrong with them. Bounds are inclusive and may overlap -- an account due under more
+ * than one rule is still checked once.
+ */
+export type VerifyRule = {
+  everyDays: number;
+  from: number;
+  to: number;
+};
+
+/** A cap on the rules, so a pasted settings blob cannot schedule unbounded work. */
+export const VERIFY_RULE_LIMITS = {
+  everyDays: { min: 1, max: 365 },
+  maxRules: 10,
+} as const;
+
+export function parseVerifyRule(value: unknown): VerifyRule | null {
+  if (!value || typeof value !== "object") return null;
+  const raw = value as Record<string, unknown>;
+
+  const everyDays = Math.trunc(Number(raw.everyDays));
+  if (!Number.isFinite(everyDays) || everyDays < VERIFY_RULE_LIMITS.everyDays.min) return null;
+
+  const from = parsePriority(Number(raw.from));
+  const to = parsePriority(Number(raw.to));
+  if (from === null || to === null) return null;
+
+  return {
+    everyDays: Math.min(VERIFY_RULE_LIMITS.everyDays.max, everyDays),
+    // Swapped rather than rejected: the form is two boxes and they are easy to fill in the
+    // wrong order, and a band that reads backwards would silently match nothing.
+    from: Math.min(from, to),
+    to: Math.max(from, to),
+  };
+}
+
+/** Whatever of the list is usable. An unreadable rule is dropped, not fatal to the rest. */
+export function parseVerifyRules(value: unknown): VerifyRule[] | null {
+  if (!Array.isArray(value)) return null;
+  return value
+    .map(parseVerifyRule)
+    .filter((rule): rule is VerifyRule => rule !== null)
+    .slice(0, VERIFY_RULE_LIMITS.maxRules);
+}
+
+/**
  * Where an account connected through the OAuth callback lands in the queue.
  *
  * Relative to what is already in the pool, rather than a bare number, because that is how the
@@ -112,6 +180,8 @@ export type Account = {
   priority: number;
   remark: string | null;
   disabled: boolean;
+  /** Why it is disabled, when something recorded a reason. */
+  blockReason: BlockReason | null;
   lastRefreshAt: number | null;
   lastRefreshError: string | null;
   /** When the address was last copied out of the panel, i.e. handed to some other service. */

@@ -15,7 +15,15 @@
  * mailbox on both ends.
  */
 import { adminSnapshot, restoreAdminSnapshot, type AdminSnapshot } from "../auth/credentials";
-import { parseAuthType, parseOauthPriorityMode, parsePriority, type AuthType } from "../types";
+import {
+  parseAuthType,
+  parseBlockReason,
+  parseOauthPriorityMode,
+  parsePriority,
+  parseVerifyRules,
+  type AuthType,
+  type BlockReason,
+} from "../types";
 import { listAccounts } from "./accounts";
 import { encryptSecret } from "./crypto";
 import { db } from "./database";
@@ -52,6 +60,7 @@ export type BackupAccount = {
   priority: number;
   remark: string | null;
   disabled: boolean;
+  blockReason: BlockReason | null;
   lastRefreshAt: number | null;
   lastRefreshError: string | null;
   lastCopiedAt: number | null;
@@ -159,6 +168,7 @@ export function exportBackup(): Backup {
       priority: account.priority,
       remark: account.remark,
       disabled: account.disabled,
+      blockReason: account.blockReason,
       lastRefreshAt: account.lastRefreshAt,
       lastRefreshError: account.lastRefreshError,
       lastCopiedAt: account.lastCopiedAt,
@@ -302,6 +312,7 @@ export function parseBackup(input: unknown): { backup: Backup; skipped: ImportRe
       priority: parsePriority(row.priority) ?? 0,
       remark: nullableText(row.remark),
       disabled: row.disabled === true,
+      blockReason: parseBlockReason(row.blockReason),
       lastRefreshAt: nullableStamp(row.lastRefreshAt),
       lastRefreshError: nullableText(row.lastRefreshError),
       lastCopiedAt: nullableStamp(row.lastCopiedAt),
@@ -445,6 +456,8 @@ function parsePanel(value: unknown): PanelSettings {
     oauthPriorityValue: number("oauthPriorityValue", DEFAULT_PANEL_SETTINGS.oauthPriorityValue),
     autoRefreshMaxDays: number("autoRefreshMaxDays", DEFAULT_PANEL_SETTINGS.autoRefreshMaxDays),
     autoRefreshAt: parseTimeOfDay(row.autoRefreshAt) ?? DEFAULT_PANEL_SETTINGS.autoRefreshAt,
+    verifyRules: parseVerifyRules(row.verifyRules) ?? DEFAULT_PANEL_SETTINGS.verifyRules,
+    verifyAt: parseTimeOfDay(row.verifyAt) ?? DEFAULT_PANEL_SETTINGS.verifyAt,
   };
 }
 
@@ -489,10 +502,11 @@ export function importBackup(
   // re-import of the whole file.
   const insertAccount = db.prepare(
     `INSERT INTO accounts (email, password, client_id, refresh_token, auth_type, priority, remark,
-                           disabled, last_refresh_at, last_refresh_error, last_copied_at,
-                           last_used_at, created_at, updated_at)
+                           disabled, block_reason, last_refresh_at, last_refresh_error,
+                           last_copied_at, last_used_at, created_at, updated_at)
      VALUES (@email, @password, @clientId, @refreshToken, @authType, @priority, @remark, @disabled,
-             @lastRefreshAt, @lastRefreshError, @lastCopiedAt, @lastUsedAt, @createdAt, @updatedAt)`,
+             @blockReason, @lastRefreshAt, @lastRefreshError, @lastCopiedAt, @lastUsedAt,
+             @createdAt, @updatedAt)`,
   );
   // Replace restores the source's own ids, so the panel's # column, and anything an
   // operator has written down against it, still points at the same address afterwards.
@@ -500,11 +514,11 @@ export function importBackup(
   // account added locally does not collide.
   const insertAccountWithId = db.prepare(
     `INSERT INTO accounts (id, email, password, client_id, refresh_token, auth_type, priority,
-                           remark, disabled, last_refresh_at, last_refresh_error, last_copied_at,
-                           last_used_at, created_at, updated_at)
+                           remark, disabled, block_reason, last_refresh_at, last_refresh_error,
+                           last_copied_at, last_used_at, created_at, updated_at)
      VALUES (@id, @email, @password, @clientId, @refreshToken, @authType, @priority, @remark,
-             @disabled, @lastRefreshAt, @lastRefreshError, @lastCopiedAt, @lastUsedAt, @createdAt,
-             @updatedAt)`,
+             @disabled, @blockReason, @lastRefreshAt, @lastRefreshError, @lastCopiedAt,
+             @lastUsedAt, @createdAt, @updatedAt)`,
   );
   const updateAccountRow = db.prepare(
     `UPDATE accounts SET
@@ -515,6 +529,7 @@ export function importBackup(
        priority           = @priority,
        remark             = @remark,
        disabled           = @disabled,
+       block_reason       = @blockReason,
        last_refresh_at    = @lastRefreshAt,
        last_refresh_error = @lastRefreshError,
        last_copied_at     = @lastCopiedAt,
@@ -581,6 +596,7 @@ export function importBackup(
         priority: account.priority,
         remark: account.remark,
         disabled: account.disabled ? 1 : 0,
+        blockReason: account.blockReason,
         lastRefreshAt: account.lastRefreshAt,
         lastRefreshError: account.lastRefreshError,
         lastCopiedAt: account.lastCopiedAt,

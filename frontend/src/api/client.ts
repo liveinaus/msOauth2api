@@ -69,6 +69,12 @@ export type AccountUsageView = {
  */
 export type AuthType = "auto" | "imap";
 
+/**
+ * Why an account is out of the pool. "abuse" is Microsoft's service abuse mode, which a
+ * freshly connected mailbox can fall into within hours of the callback.
+ */
+export type BlockReason = "abuse" | "invalidGrant" | "manual";
+
 export type AccountView = {
   id: number;
   usages: AccountUsageView[];
@@ -81,6 +87,8 @@ export type AccountView = {
   tokenHint: string;
   remark: string | null;
   disabled: boolean;
+  /** Set when something recorded a reason for disabling it. */
+  blockReason: BlockReason | null;
   lastRefreshAt: number | null;
   lastRefreshError: string | null;
   lastCopiedAt: number | null;
@@ -140,7 +148,21 @@ export type PanelSettings = {
   autoRefreshMaxDays: number;
   /** Local time of day the sweep runs, `HH:MM`. */
   autoRefreshAt: string;
+  /** Priority bands to re-check, each on its own interval. Empty turns the check off. */
+  verifyRules: VerifyRule[];
+  /** Local time of day the verification runs, `HH:MM`. */
+  verifyAt: string;
 };
+
+/** One priority band and how often the accounts in it are re-checked. Bounds are inclusive. */
+export type VerifyRule = {
+  everyDays: number;
+  from: number;
+  to: number;
+};
+
+/** Matches the server's cap; anything past it is dropped when the rules are saved. */
+export const MAX_VERIFY_RULES = 10;
 
 export type OauthPriorityMode =
   "normal" | "highestPlusOne" | "highest" | "lowest" | "lowestMinusOne" | "fixed";
@@ -158,6 +180,8 @@ export const DEFAULT_PANEL_SETTINGS: PanelSettings = {
   oauthPriorityValue: 0,
   autoRefreshMaxDays: 0,
   autoRefreshAt: "04:00",
+  verifyRules: [],
+  verifyAt: "05:00",
 };
 
 // ── Calls ─────────────────────────────────────────────────────────────────────

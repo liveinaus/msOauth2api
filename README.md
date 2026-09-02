@@ -308,6 +308,50 @@ oldest first, three at a time -- the same path and the same throttling as the pa
 
 Times are local to the container, so set `TZ` if you want 04:00 to mean 04:00 where you are.
 
+## Accounts blocked for abuse
+
+A mailbox connected through the callback can be put into service abuse mode within hours of
+consenting, and nothing tells the panel: the row looks healthy until an address is handed out
+and the read fails. What Microsoft answers when it happens is
+
+```
+AADSTS70000: User account is found to be in service abuse mode
+```
+
+Any refresh that gets that answer -- the **Refresh tokens** button, the nightly sweep or the
+scheduled check below -- **disables the account on the spot**, records `abuse` as the reason
+and appends Microsoft's own wording to the account's note, dated. The panel shows **Abuse**
+in place of the usual Disabled badge, with the note on hover.
+
+It does not wait for the second failure an ordinary dead grant needs (see
+[When an account gets marked](#when-an-account-gets-marked)). The verdict is specific and
+Microsoft never returns it as a blip, so leaving the address in the pool only spends it on
+requests that cannot succeed. It is matched on the phrase and not on the error number, since
+`AADSTS70000` is the generic `invalid_grant` reply that an ordinary expired token carries too.
+
+Switching an account back on clears the reason with it. `block=abuse` travels in the
+delimited export and the JSON backup, so a blocked row survives a restore.
+
+### Checking before an address is needed
+
+Settings can re-check accounts on a timer rather than waiting for one to fail in use. Each
+rule takes a band of the pool and its own interval, so the two ends can be checked at
+different rates:
+
+| Every (days) | Priority from | to  | What it covers                                  |
+| ------------ | ------------- | --- | ----------------------------------------------- |
+| 3            | -99           | -99 | The bottom of the queue, where trouble collects |
+| 14           | 11            | 99  | Everything still waiting to be spent            |
+
+Pick a **check** time, 05:00 by default. No rules leaves the check off, which is the default.
+
+Each due account costs one token call, three at a time, on the same path as the refresh
+button. Which accounts are due is measured from the last refresh, successful or not, so an
+address the panel spent this morning is not spent again tonight; an account that has never
+been refreshed is due at once. Bands may overlap -- an account matching several rules is still
+only checked once -- and disabled rows are skipped. Like the refresh sweep, adding a rule part
+way through a day waits for the next one.
+
 ## Backup and migration
 
 Settings has a **Backup and migration** card that exports the whole panel as one JSON

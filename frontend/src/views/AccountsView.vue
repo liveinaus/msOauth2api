@@ -47,6 +47,28 @@
           >
             <i class="fa-solid fa-xmark"></i>
           </button>
+          <!-- An outright rank, for putting a batch somewhere known rather than counting
+               clicks to get there. Enter applies it, like any other one-field control. -->
+          <input
+            v-model.number="bulkPriority"
+            class="form-input"
+            style="width: 76px"
+            type="number"
+            :min="-99"
+            :max="99"
+            :placeholder="t('accounts.priorityPlaceholder')"
+            :disabled="!selected.size || bumping"
+            :title="t('accounts.setPriorityHint')"
+            @keyup.enter="applyExactPriority"
+          />
+          <button
+            class="btn"
+            :disabled="!selected.size || bumping || bulkPriority === ''"
+            :title="t('accounts.setPriorityHint')"
+            @click="applyExactPriority"
+          >
+            <i class="fa-solid fa-check"></i>
+          </button>
         </span>
         <select
           v-model="bulkAuthType"
@@ -199,7 +221,15 @@
             </td>
             <td>
               <div class="cell-row">
-                <span v-if="account.disabled" class="badge badge-off">{{ t("accounts.disabled") }}</span>
+                <!-- A blocked row says why: "disabled" alone does not distinguish an
+                     address somebody parked from one Microsoft took away. -->
+                <span v-if="account.disabled" class="badge badge-off" :title="statusTitle(account)">
+                  {{
+                    account.blockReason
+                      ? t(`accounts.blockReason.${account.blockReason}`)
+                      : t("accounts.disabled")
+                  }}
+                </span>
                 <span
                   v-else-if="account.lastRefreshError"
                   class="badge badge-err"
@@ -596,6 +626,8 @@ const markingAuthType = ref(false);
 const bumping = ref(false);
 /** Empty is the placeholder; picking a value applies it and snaps back. */
 const bulkAuthType = ref<AuthType | "">("");
+/** Empty rather than 0, so a blank box is "no rank typed" and not "set them all to normal". */
+const bulkPriority = ref<number | "">("");
 
 const hideUsedHint = computed(() =>
   activeType.value
@@ -1083,6 +1115,17 @@ async function resetPriority(): Promise<void> {
   await applyPriority({ priority: 0 });
 }
 
+/**
+ * Sets one rank across the selection.
+ *
+ * The box is left filled after it applies: the same rank is usually wanted for the next
+ * batch, and clearing it would mean typing the number again for every group.
+ */
+async function applyExactPriority(): Promise<void> {
+  if (bulkPriority.value === "") return;
+  await applyPriority({ priority: Number(bulkPriority.value) });
+}
+
 async function applyPriority(change: { delta: number } | { priority: number }): Promise<void> {
   if (!selected.value.size) return;
   bumping.value = true;
@@ -1131,6 +1174,14 @@ async function refreshTokens(): Promise<void> {
 
 function formatTime(value: number | null): string {
   return value ? new Date(value).toLocaleString() : t("common.never");
+}
+
+/**
+ * The hover text on a disabled row: the note holding the reason, which for an automatic
+ * block is Microsoft's own wording.
+ */
+function statusTitle(account: AccountView): string {
+  return account.remark?.trim() || t("accounts.disabled");
 }
 
 /** Confirmed types read as "used for X on <date>"; a live lease says it is still out. */
