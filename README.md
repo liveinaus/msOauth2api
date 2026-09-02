@@ -3,7 +3,7 @@
 Turns Microsoft OAuth2 mailboxes into simple HTTP endpoints, with a Vue web panel for
 managing accounts and reading mail. Self-hosted as a single Docker container.
 
-Version **0.8.2**, MIT licensed. Pin `liveinaus/msoauth2api:0.8.2` for a fixed deployment,
+Version **0.8.3**, MIT licensed. Pin `liveinaus/msoauth2api:0.8.3` for a fixed deployment,
 or track `latest`.
 
 ## What it does
@@ -464,12 +464,35 @@ tags with the `v` stripped, plus a moving alias per channel:
 
 | Git tag         | Image tags             |
 | --------------- | ---------------------- |
-| `v0.8.2`        | `0.8.2`, `latest`      |
-| `v0.8.2-beta.1` | `0.8.2-beta.1`, `beta` |
-| `dev-v0.8.2-1`  | `dev-v0.8.2-1`, `dev`  |
+| `v0.8.3`        | `0.8.3`, `latest`      |
+| `v0.9.0-beta.1` | `0.9.0-beta.1`, `beta` |
+| `v0.9.0-rc.1`   | `0.9.0-rc.1`, `beta`   |
+| `dev-v0.8.3-1`  | `dev-v0.8.3-1`, `dev`  |
 
-A stable release goes out when a GitHub release is published; beta and dev tags publish on a
-direct tag push. [.github/workflows/dockerhub-description.yml](.github/workflows/dockerhub-description.yml)
+`latest` only ever names a finished version: any tag carrying a prerelease suffix shares the
+`beta` alias, so an `-rc` cannot become what a plain `docker pull` gets.
+
+### Cutting a release
+
+Bumping the version is the whole gesture. Set the same version in `backend/package.json` and
+`frontend/package.json`, merge to `main`, and
+[.github/workflows/release-on-version.yml](.github/workflows/release-on-version.yml) runs the
+tests, tags the commit, publishes a GitHub release with generated notes and then publishes
+the images.
+
+- **The two versions must agree.** They are built into one image, so a mismatch fails the run
+  rather than shipping half a bump. A stale version in this README is only a warning.
+- **Tests run before the tag.** A failing bump leaves no tag, no release and no image, so the
+  fix is just another commit rather than an unpicked release.
+- **It is keyed on the tag, not the diff.** Nothing happens if `v<version>` is already
+  tagged, so a dependency bump in the same file, a re-run and a manual dispatch are no-ops.
+- **A prerelease version is marked as one.** Any `-` suffix (`0.9.0-rc.1`) becomes a GitHub
+  prerelease and takes the `beta` alias.
+
+Publishing a release by hand still works and takes the same path, as does pushing a `dev-*`
+or `v*-beta*` tag directly. [.github/workflows/ci.yml](.github/workflows/ci.yml) runs the
+same checks on every push and pull request, and
+[.github/workflows/dockerhub-description.yml](.github/workflows/dockerhub-description.yml)
 pushes this README to the Docker Hub repository description.
 
 ## Getting a refresh token
